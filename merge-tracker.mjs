@@ -126,8 +126,14 @@ function extractReportNum(reportStr) {
 }
 
 function parseScore(s) {
-  const m = s.replace(/\*\*/g, '').match(/([\d.]+)/);
-  return m ? parseFloat(m[1]) : 0;
+  // "-/5", "N/A", "DUP", "" → no score (null), NOT 5.
+  // Real scores look like "4.5/5" or "4.5". Anything else → null.
+  const clean = (s || '').replace(/\*\*/g, '').trim();
+  if (!clean || clean === '-' || /^-\/\d+/.test(clean) || /^N\/A$/i.test(clean) || /^DUP$/i.test(clean)) {
+    return null;
+  }
+  const m = clean.match(/^(\d+\.?\d*)(?:\/\d+)?$/);
+  return m ? parseFloat(m[1]) : null;
 }
 
 function parseAppLine(line) {
@@ -312,11 +318,22 @@ for (const file of tsvFiles) {
     const newScore = parseScore(addition.score);
     const oldScore = parseScore(duplicate.score);
 
-    if (newScore > oldScore) {
+    // If old row has no score (Pending — "-/5"), any real new score wins.
+    // Otherwise require strict improvement.
+    const shouldUpdate = (oldScore === null && newScore !== null) || (newScore !== null && oldScore !== null && newScore > oldScore);
+    if (shouldUpdate) {
       console.log(`🔄 Update: #${duplicate.num} ${addition.company} — ${addition.role} (${oldScore}→${newScore})`);
       const lineIdx = appLines.indexOf(duplicate.raw);
       if (lineIdx >= 0) {
-        const updatedLine = `| ${duplicate.num} | ${addition.date} | ${addition.company} | ${addition.role} | ${addition.score} | ${duplicate.status} | ${duplicate.pdf} | ${addition.report} | Re-eval ${addition.date} (${oldScore}→${newScore}). ${addition.notes} |`;
+        // Use addition's status + pdf if old was empty/Pending — a fresh
+        // evaluation upgrades both. Preserve old status if already past Evaluated
+        // (Applied, Interview, Offer, etc — don't regress those).
+        const oldStatus = (duplicate.status || '').trim();
+        const newStatus = (addition.status || '').trim();
+        const advanceStatuses = ['Applied', 'Responded', 'Interview', 'Offer'];
+        const finalStatus = advanceStatuses.includes(oldStatus) ? oldStatus : (newStatus || oldStatus);
+        const finalPdf = (addition.pdf && addition.pdf !== '-') ? addition.pdf : duplicate.pdf;
+        const updatedLine = `| ${duplicate.num} | ${addition.date} | ${addition.company} | ${addition.role} | ${addition.score} | ${finalStatus} | ${finalPdf} | ${addition.report} | Re-eval ${addition.date} (${oldScore ?? '-'}→${newScore}). ${addition.notes} |`;
         appLines[lineIdx] = updatedLine;
         updated++;
       }

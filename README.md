@@ -1,5 +1,7 @@
 # Career-Ops
 
+> **Fork note:** this is [@pbhat89](https://github.com/pbhat89)'s personal copy of [santifer/career-ops](https://github.com/santifer/career-ops). Adds a Streamlit web dashboard (`dashboard-web/`), English-translated agent modes, and a `merge-tracker.mjs` score-parser fix. See [FORK.md](FORK.md) for the full diff vs upstream and setup notes. All credit for the underlying system goes to the upstream author.
+
 [English](README.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [한국어](README.ko-KR.md) | [日本語](README.ja.md) | [Русский](README.ru.md) | [简体中文](README.cn.md) | [繁體中文](README.zh-TW.md)
 
 <p align="center">

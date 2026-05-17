@@ -1,0 +1,21 @@
+[server]
+address = "localhost"
+port = 8765
+headless = true
+runOnSave = false
+fileWatcherType = "none"
+
+[browser]
+gatherUsageStats = false
+
+[client]
+toolbarMode = "minimal"
+showSidebarNavigation = true
+
+[theme]
+base = "dark"
+primaryColor = "#C2522D"
+backgroundColor = "#08090A"
+secondaryBackgroundColor = "#101113"
+textColor = "#F7F8F8"
+font = "sans serif"

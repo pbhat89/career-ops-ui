@@ -3,16 +3,27 @@ cv.md
 data/applications.md
 data/pipeline.md
 data/scan-history.tsv
+data/interest.tsv
+data/.last-refresh
 reports/*.md
 !reports/.gitkeep
 output/*
 !output/.gitkeep
+interview-prep/*
+!interview-prep/.gitkeep
+article-digest.md
+initial-leads.md
 batch/logs/*
 !batch/logs/.gitkeep
 batch/batch-state.tsv
 batch/batch-input.tsv
+batch/batch-runner.pid
+batch/.batch-state.lock/
 batch/tracker-additions/**/*.tsv
 !batch/tracker-additions/.gitkeep
+batch/cv-prateek-*.html
+batch/cv-*.html
+batch/gen-*.mjs
 jds/*
 !jds/.gitkeep
 
@@ -35,6 +46,20 @@ modes/_profile.md
 node_modules/
 bun.lock
 
+# Python — Streamlit dashboard venv + caches + runtime logs
+dashboard-web/.venv/
+dashboard-web/**/__pycache__/
+dashboard-web/**/*.pyc
+dashboard-web/.streamlit-stdout.log
+dashboard-web/.streamlit-stderr.log
+dashboard-web/.tunnel.log
+dashboard-web/.cf-tunnel.log
+dashboard-web/.cf-tunnel.log.err
+
+# Compiled binaries — built locally, not committed
+dashboard/career-dashboard.exe
+*.pyc
+
 # OS
 .DS_Store
 *.mov
@@ -45,3 +70,4 @@ bun.lock
 .claude/memory/
 career-dashboard
 package-lock.json
+.gstack/

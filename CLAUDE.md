@@ -46,6 +46,15 @@ To rollback: `node update-system.mjs rollback`
 
 AI-powered job search automation built on Claude Code: pipeline tracking, offer evaluation, CV generation, portal scanning, batch processing.
 
+### Dashboards
+
+Two dashboards ship with career-ops — pick whichever feels right:
+
+- **`dashboard/`** (Go / Bubble Tea) — terminal UI. Launch with `dashboard/career-dashboard.exe`.
+- **`dashboard-web/`** (Streamlit) — click-driven web UI on http://localhost:8765. Launch with `career-dashboard-web.bat` (first run creates a venv automatically). Pages: Pipeline, Inbox, Scan, Report, Patterns, Settings. Mutations confirm before writing. Auto-refresh (re-scan, liveness, follow-ups, patterns) kicks in on the second launch onward; first launch shows existing data as-is.
+
+Both dashboards read the same source-of-truth files (`data/applications.md`, `reports/*`, `data/pipeline.md`) — there is no separate database.
+
 ### Main Files
 
 | File | Function |
