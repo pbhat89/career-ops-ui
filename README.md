@@ -1,7 +1,5 @@
 # Career-Ops
 
-> **Fork note:** this is [@pbhat89](https://github.com/pbhat89)'s personal copy of [santifer/career-ops](https://github.com/santifer/career-ops). Adds a Streamlit web dashboard (`dashboard-web/`), English-translated agent modes, and a `merge-tracker.mjs` score-parser fix. See [FORK.md](FORK.md) for the full diff vs upstream and setup notes. All credit for the underlying system goes to the upstream author.
-
 [English](README.md) | [Español](README.es.md) | [Português (Brasil)](README.pt-BR.md) | [한국어](README.ko-KR.md) | [日本語](README.ja.md) | [Русский](README.ru.md) | [简体中文](README.cn.md) | [繁體中文](README.zh-TW.md)
 
 <p align="center">
@@ -23,6 +21,7 @@
   <img src="https://img.shields.io/badge/Go-00ADD8?style=flat&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Playwright-2EAD33?style=flat&logo=playwright&logoColor=white" alt="Playwright">
   <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT">
+  <a href="TRADEMARK.md"><img src="https://img.shields.io/badge/Trademark-Policy-blue.svg" alt="Trademark Policy"></a>
   <a href="https://discord.gg/8pRpHETxa4"><img src="https://img.shields.io/badge/Discord-5865F2?style=flat&logo=discord&logoColor=white" alt="Discord"></a>
   <br>
   <img src="https://img.shields.io/badge/EN-blue?style=flat" alt="EN">
@@ -158,7 +157,7 @@ node gemini-eval.mjs --file ./jds/my-job.txt
 npm run gemini:eval -- "JD text here"
 ```
 
-> **Free tier:** Both options work without billing. Native CLI uses Google OAuth; the API script uses `gemini-2.0-flash` (15 RPM, 1M tokens/day free).
+> **Free tier:** Both options work without billing. Native CLI uses Google OAuth; the API script uses `gemini-2.5-flash` (15 RPM, 1M tokens/day free).
 
 ## Usage
 
@@ -234,7 +233,8 @@ Features: 6 filter tabs, 4 sort modes, grouped/flat view, lazy-loaded previews, 
 
 ```
 career-ops/
-├── CLAUDE.md                    # Agent instructions
+├── AGENTS.md                    # Canonical agent instructions (all CLIs)
+├── CLAUDE.md                    # Claude Code wrapper (imports AGENTS.md)
 ├── cv.md                        # Your CV (create this)
 ├── article-digest.md            # Your proof points (optional)
 ├── config/
@@ -315,9 +315,12 @@ See [LEGAL_DISCLAIMER.md](LEGAL_DISCLAIMER.md) for full details. This software i
 
 Got hired using career-ops? [Share your story!](https://github.com/santifer/career-ops/issues/new?template=i-got-hired.yml)
 
-## License
+## License & Trademark
 
-MIT
+The code is licensed under [MIT](LICENSE). The "career-ops" name and
+brand are governed by the [Trademark Policy](TRADEMARK.md) — permissive
+for community use, reserved for commercial product naming and
+endorsement.
 
 ## Let's Connect
 
