@@ -640,18 +640,17 @@ def inbox_dialog():
                 st.markdown(f"- ✓ [{entry['url']}]({entry['url']})" + (f" — *{meta}*" if meta else ""))
 
 
-# Streamlit only allows ONE dialog open per script run. Use elif so a stuck
-# flag from a previous interaction doesn't crash the page when the user opens
-# a different dialog. Always render the dialog matching the FIRST active flag.
+# Streamlit only allows ONE dialog open per script run. Pick the first
+# active flag and consume EVERY flag (including the active one) before
+# rendering — so closing the dialog via the X button can't leave a stuck
+# flag that hijacks the next click on a different action.
 _DIALOG_KEYS = (
     "show_paste_dialog", "show_scan_dialog", "show_inbox_dialog",
     "show_eval_dialog", "show_diag_dialog", "show_compare_dialog",
 )
 _active = next((k for k in _DIALOG_KEYS if st.session_state.get(k)), None)
-# Clear any stale flags so they can't piggyback the next rerun.
 for _k in _DIALOG_KEYS:
-    if _k != _active:
-        st.session_state[_k] = False
+    st.session_state[_k] = False
 
 if _active == "show_paste_dialog":
     paste_dialog()
