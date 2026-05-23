@@ -1182,3 +1182,83 @@ tracked_companies:
     scan_query: '"n11" careers "Software Engineer" OR "Backend" OR "Frontend" OR "Yazılım"'
     notes: "Istanbul. E-commerce marketplace (Doğuş Group)."
     enabled: false
+
+  # ===========================================================
+  # MyCareersFuture (SG gov) — keyword-driven HTTP searches.
+  # Powered by providers/mycareersfuture.mjs. Salary always included.
+  # Each entry is a saved search; the provider hits MCF's v2 API
+  # for each one and returns up to mcf_limit results, sorted by recency.
+  # Default: disabled. Enable individually for SG-targeted searches.
+  # ===========================================================
+
+  - name: MCF — Head of AI / Data / Analytics
+    provider: mycareersfuture
+    mcf_search: "Head of AI"
+    mcf_limit: 50
+    enabled: false
+
+  - name: MCF — Chief AI / Data / Analytics Officer
+    provider: mycareersfuture
+    mcf_search: "Chief AI Officer"
+    mcf_limit: 30
+    enabled: false
+
+  - name: MCF — Director Data Science
+    provider: mycareersfuture
+    mcf_search: "Director Data Science"
+    mcf_limit: 50
+    enabled: false
+
+  - name: MCF — Head of Data
+    provider: mycareersfuture
+    mcf_search: "Head of Data"
+    mcf_limit: 50
+    enabled: false
+
+  - name: MCF — Head of Analytics
+    provider: mycareersfuture
+    mcf_search: "Head of Analytics"
+    mcf_limit: 50
+    enabled: false
+
+  - name: MCF — Principal / Lead Data Scientist
+    provider: mycareersfuture
+    mcf_search: "Principal Data Scientist"
+    mcf_limit: 30
+    enabled: false
+
+  - name: MCF — VP Data Science / AI
+    provider: mycareersfuture
+    mcf_search: "VP Data Science"
+    mcf_limit: 30
+    enabled: false
+
+  - name: MCF — Decision Management / Insights
+    provider: mycareersfuture
+    mcf_search: "Decision Management"
+    mcf_limit: 30
+    enabled: false
+
+  - name: MCF — AI Enablement / AI Strategy
+    provider: mycareersfuture
+    mcf_search: "AI Enablement"
+    mcf_limit: 30
+    enabled: false
+
+  - name: MCF — Customer Analytics / Marketing Sciences
+    provider: mycareersfuture
+    mcf_search: "Customer Analytics"
+    mcf_limit: 20
+    enabled: false
+
+  - name: MCF — Practice Lead / Centre of Excellence AI
+    provider: mycareersfuture
+    mcf_search: "Practice Lead AI"
+    mcf_limit: 20
+    enabled: false
+
+  - name: MCF — ML Engineering Leadership
+    provider: mycareersfuture
+    mcf_search: "Head Machine Learning"
+    mcf_limit: 30
+    enabled: false

@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from services import tracker, runner, styling, project_root
+from services.ui_helpers import pill_html
 
 styling.inject()
 
@@ -24,26 +25,34 @@ if bnc1.button("← Back to Desk", key="signals_back_btn", help="Return to the w
 # Dark-mode-safe Vega theme — applied to every chart
 def _dark_chart(c: alt.Chart) -> alt.Chart:
     return c.configure_view(
-        stroke=None, fill="#101113",
+        stroke=None, fill="#1C2025",
     ).configure_axis(
-        labelColor="#B4B8BF", titleColor="#8A8F98",
-        gridColor="#1C1D20", domainColor="#26282D",
-        tickColor="#26282D", labelFontSize=11, titleFontSize=11,
+        labelColor="#C9CBCF", titleColor="#8C9196",
+        gridColor="rgba(255,255,255,0.04)", domainColor="rgba(255,255,255,0.08)",
+        tickColor="rgba(255,255,255,0.08)", labelFontSize=11, titleFontSize=11,
     ).configure_title(
-        color="#F7F8F8", fontSize=13, anchor="start",
+        color="#E7E9EC", fontSize=13, anchor="start",
     )
 
 
-st.title("Signals")
+df = tracker.load_applications()
+st.markdown(
+    f'<div style="display:flex;align-items:center;gap:10px;margin-top:0.3rem;">'
+    f'<h1 style="margin:0;">Signals</h1>'
+    f'{pill_html(f"{len(df)} applications", "default", dot=True)}'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 st.caption("Where the pipeline leaks, what's working, where new offers come from.")
 
-df = tracker.load_applications()
 if df.empty:
     st.info("No applications yet.")
     st.stop()
 
 
-tab_funnel, tab_patterns, tab_scan = st.tabs(["Funnel", "Patterns", "Scan history"])
+tab_funnel, tab_patterns, tab_scan, tab_lab = st.tabs([
+    "Funnel", "Patterns", "Scan history", "Lab"
+])
 
 
 # ── Funnel + score distribution ────────────────────────────────────────
@@ -58,7 +67,7 @@ with tab_funnel:
         counts.columns = ["status", "count"]
         chart = (
             alt.Chart(counts)
-            .mark_bar(cornerRadius=4, color="#C2522D", fill="#C2522D")
+            .mark_bar(cornerRadius=4, color="#3DB985", fill="#3DB985")
             .encode(
                 x=alt.X("count:Q", title=None),
                 y=alt.Y("status:N", sort=funnel_order, title=None),
@@ -76,7 +85,7 @@ with tab_funnel:
         else:
             hist = (
                 alt.Chart(scored)
-                .mark_bar(cornerRadius=4, color="#D26142", fill="#D26142")
+                .mark_bar(cornerRadius=4, color="#6EE7B7", fill="#6EE7B7")
                 .encode(
                     x=alt.X("score:Q", bin=alt.Bin(maxbins=10), title="score"),
                     y=alt.Y("count():Q", title=None),
@@ -138,6 +147,92 @@ with tab_patterns:
 
 
 # ── Scan history ──────────────────────────────────────────────────────
+
+with tab_lab:
+    st.caption("Standalone evaluations not tied to a single role. Outputs saved to `output/prompts/`.")
+    import datetime as _dt, re as _re
+    out_dir = project_root() / "output" / "prompts"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    def _slug(t: str) -> str:
+        return _re.sub(r"[^a-z0-9]+", "-", str(t).lower()).strip("-")
+
+    def _read_mode(fname: str) -> str:
+        p = project_root() / "modes" / fname
+        return p.read_text(encoding="utf-8", errors="ignore") if p.exists() else ""
+
+    lab1, lab2 = st.columns(2)
+
+    with lab1:
+        with st.container(border=True):
+            st.markdown("**Training / course / cert**")
+            st.caption("Evaluate whether a course is worth the time investment against your goals.")
+            t_name = st.text_input("Course or cert name", placeholder="e.g. AWS ML Specialty",
+                                    key="lab_training_name")
+            t_url = st.text_input("URL (optional)", key="lab_training_url")
+            t_cost = st.text_input("Cost / time (optional)", placeholder="e.g. $300, 40h",
+                                    key="lab_training_cost")
+            if st.button("Generate evaluation prompt", key="lab_training_btn",
+                          disabled=not t_name.strip()):
+                body = (
+                    f"# Training evaluation prompt — {t_name}\n\n"
+                    f"**Name:** {t_name}\n"
+                    f"**URL:** {t_url or '(none)'}\n"
+                    f"**Cost / time:** {t_cost or '(unspecified)'}\n\n"
+                    "---\n\n## Instructions\n\n"
+                    "Evaluate this course / certification against my target archetypes and "
+                    "career goals. Output: fit score (0-5), what it unlocks, opportunity cost, "
+                    "verdict (Take / Skip / Take if free).\n\n"
+                    "## Context (career-ops mode)\n\n"
+                    + _read_mode("training.md")[:6000]
+                )
+                slug = _slug(t_name)[:50]
+                out = out_dir / f"training-{slug}-{_dt.date.today().isoformat()}.md"
+                out.write_text(body, encoding="utf-8")
+                st.toast(f"Saved {out.relative_to(project_root())}", icon="✍")
+                with st.expander("View prompt", expanded=True):
+                    st.code(body, language="markdown")
+
+    with lab2:
+        with st.container(border=True):
+            st.markdown("**Portfolio project**")
+            st.caption("Evaluate a side-project idea against your archetypes and proof-point needs.")
+            p_name = st.text_input("Project name", placeholder="e.g. AI evaluator for resumes",
+                                    key="lab_project_name")
+            p_desc = st.text_area("One-line description",
+                                   placeholder="What does it do? Who is it for?",
+                                   key="lab_project_desc", height=80)
+            if st.button("Generate evaluation prompt", key="lab_project_btn",
+                          disabled=not p_name.strip()):
+                body = (
+                    f"# Portfolio project evaluation prompt — {p_name}\n\n"
+                    f"**Name:** {p_name}\n"
+                    f"**Description:** {p_desc or '(unspecified)'}\n\n"
+                    "---\n\n## Instructions\n\n"
+                    "Evaluate this project idea against my target archetypes and proof-point gaps. "
+                    "Output: fit score (0-5), proof points it unlocks, scope to keep it under 2 weeks, "
+                    "verdict (Build now / Park / Skip).\n\n"
+                    "## Context (career-ops mode)\n\n"
+                    + _read_mode("project.md")[:6000]
+                )
+                slug = _slug(p_name)[:50]
+                out = out_dir / f"project-{slug}-{_dt.date.today().isoformat()}.md"
+                out.write_text(body, encoding="utf-8")
+                st.toast(f"Saved {out.relative_to(project_root())}", icon="✍")
+                with st.expander("View prompt", expanded=True):
+                    st.code(body, language="markdown")
+
+    st.divider()
+    st.markdown("##### Saved prompts")
+    saved = sorted(out_dir.glob("*.md"), key=lambda p: p.stat().st_mtime, reverse=True)[:20]
+    if not saved:
+        st.caption("No prompts saved yet.")
+    else:
+        for p in saved:
+            age_d = (_dt.datetime.now() - _dt.datetime.fromtimestamp(p.stat().st_mtime)).days
+            with st.expander(f"{p.name} · {age_d}d ago", expanded=False):
+                st.code(p.read_text(encoding="utf-8", errors="ignore"), language="markdown")
+
 
 with tab_scan:
     history_file = project_root() / "data" / "scan-history.tsv"

@@ -71,6 +71,41 @@ _TLDR_LINE = re.compile(r"\*\*TL;DR:\*\*\s*(.+)")
 _BLOCK_A_TO_C = re.compile(r"(^## A\).*?)(?=^## C\))", re.MULTILINE | re.DOTALL)
 _BLOCK_F = re.compile(r"(^## F\).*?)(?=^## [A-Z]\))", re.MULTILINE | re.DOTALL)
 
+# Per-block extractor: matches a single "## X) Title" section up to the next
+# ## A-Z heading OR end-of-file. Used by the new split-report Role tabs.
+_BLOCK_LETTERS = ("A", "B", "C", "D", "E", "F", "G")
+
+
+def _block_re(letter: str) -> re.Pattern:
+    """Build a regex that captures a single `## {letter}) ...` block."""
+    return re.compile(
+        rf"(^## {letter}\).*?)(?=^## [A-Z]\)|^## Global|^## Score|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+
+
+def extract_block(report_path: str | Path, letter: str) -> str:
+    """Extract a single block (A–G) by section letter. Empty string if absent."""
+    if letter not in _BLOCK_LETTERS:
+        return ""
+    body = report_body(report_path)
+    if not body:
+        return ""
+    m = _block_re(letter).search(body)
+    return m.group(1).rstrip() if m else ""
+
+
+def extract_global_score(report_path: str | Path) -> str:
+    """Extract the `## Global Score` / `## Score` trailer of a report."""
+    body = report_body(report_path)
+    if not body:
+        return ""
+    m = re.search(
+        r"(^## (?:Global Score|Score)\b.*?)(?=\Z)",
+        body, re.MULTILINE | re.DOTALL,
+    )
+    return m.group(1).rstrip() if m else ""
+
 
 @dataclass
 class ReportSummary:

@@ -8,6 +8,7 @@ import re
 import streamlit as st
 
 from services import tracker, refresh, styling
+from services.ui_helpers import kpi_tile_grid
 
 # Mirror desk.py's expiry signals + inactive set so the sidebar "Jobs Found
 # (active)" KPI agrees with the worklist's hide-inactive filter.
@@ -37,6 +38,25 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 styling.inject()
+
+# ── First-run onboarding gate ─────────────────────────────────────────
+# If the user-layer files (cv.md / config/profile.yml / modes/_profile.md /
+# portals.yml) are missing, take over the page with the setup wizard
+# BEFORE the sidebar/router loads. Once the wizard's save_all() runs, the
+# files exist and the next rerun falls through to the normal dashboard.
+from services import onboarding as _onboarding  # noqa: E402
+
+if _onboarding.is_first_run() and not st.session_state.get("onboarding_complete"):
+    import importlib.util as _ilu  # noqa: E402
+    from pathlib import Path as _Path  # noqa: E402
+
+    _wizard_path = _Path(__file__).parent / "pages" / "_onboarding.py"
+    _spec = _ilu.spec_from_file_location("_career_onboarding_wizard", _wizard_path)
+    _wizard = _ilu.module_from_spec(_spec)
+    _spec.loader.exec_module(_wizard)  # type: ignore[union-attr]
+    _wizard.render()
+    st.stop()
+
 
 # ── Email gate (active only when CAREEROPS_AUTH_EMAIL is set; off for local) ──
 _AUTH_EMAIL = (os.environ.get("CAREEROPS_AUTH_EMAIL") or "").strip().lower()
@@ -94,19 +114,51 @@ with st.sidebar:
             return bool(_INDUSTRY_MATCH_RE.search(blob))
         industry_match = int(df.apply(_is_industry, axis=1).sum())
 
-        # Inline KPIs — minimal, no chips
         st.markdown(
-            f'''
-            <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px;">
-              <div style="display:flex;justify-content:space-between;"><span style="color:var(--tx3);font-size:12px;">Jobs Found (active)</span><span style="color:var(--tx);font-weight:600;">{jobs_found}</span></div>
-              <div style="display:flex;justify-content:space-between;"><span style="color:var(--tx3);font-size:12px;">High-fit (≥4.3)</span><span style="color:var(--tx);font-weight:600;">{high_fit}</span></div>
-              <div style="display:flex;justify-content:space-between;"><span style="color:var(--tx3);font-size:12px;">Industry match</span><span style="color:var(--tx);font-weight:600;">{industry_match}</span></div>
-            </div>
-            ''',
+            kpi_tile_grid([
+                ("Jobs Found",     jobs_found,     False),
+                ("High-fit ≥4.3",  high_fit,       True),
+                ("Industry match", industry_match, False),
+            ]),
             unsafe_allow_html=True,
         )
     else:
         st.caption("No applications yet.")
+
+    st.divider()
+
+    # ── Command palette — one click per /career-ops command ──────────
+    st.markdown('<div class="section-label" style="margin-top:4px;">Commands</div>',
+                unsafe_allow_html=True)
+
+    def _go_desk(state_key: str | None = None):
+        if state_key:
+            st.session_state[state_key] = True
+        # Always route through Desk because that's where every dialog lives.
+        try:
+            st.switch_page("pages/desk.py")
+        except Exception:
+            pass
+
+    cmd_buttons = [
+        ("📥  Paste JD URL",       "show_paste_dialog",  "Drop a JD URL into the inbox."),
+        ("🛰️  Scan portals",        "show_scan_dialog",   "Greenhouse / Ashby / Lever sweep."),
+        ("📨  Inbox",               "show_inbox_dialog",  "Process pending URLs in pipeline.md."),
+        ("⚡  Evaluate pending",    "show_eval_dialog",   "Run batch evaluation."),
+        ("🧰  Diagnostics",         "show_diag_dialog",   "Liveness · dedup · update check."),
+    ]
+    for label, key, tip in cmd_buttons:
+        if st.button(label, use_container_width=True, key=f"cmd_{key}", help=tip):
+            _go_desk(key)
+
+    st.markdown(
+        '<div style="margin-top:8px;color:var(--tx3);font-size:0.75rem;">'
+        'Per-role commands (PDF · Apply · Contacto · Deep · Interview-prep · LaTeX) '
+        'live on the <strong>Role</strong> page.<br>'
+        'Training / Project evaluations are on <strong>Signals → Lab</strong>.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
 
     st.divider()
 

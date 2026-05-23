@@ -45,6 +45,41 @@ REPORT_FIXTURE = """# Evaluation: HSBC — Head of DAO Singapore
 | Field | Value |
 |-------|-------|
 | **TL;DR** | Run data strategy across HSBC's SG/MY/ID cluster. |
+| **Posted** | 2026-04-12 |
+
+## B) CV Match
+
+| Requirement | Evidence | Match |
+|-------------|----------|-------|
+| 10+ yrs analytics | Munich Re APAC lead | Strong |
+
+## C) Level & Strategy
+
+Senior level — sell at Head/Director tier.
+
+## D) Compensation & Demand
+
+| **Posted base range** | SGD 200,000 – 280,000 |
+
+## E) Tailoring Plan
+
+CV updates: lead with insurance experience.
+
+## F) Interview Plan
+
+STAR stories from Munich Re APAC.
+
+## G) Posting Legitimacy
+
+Tier: Proceed with caution. Posting is 30+ days old.
+
+## Global Score
+
+| Dimension | Score |
+|-----------|-------|
+| CV Match | 4.5 |
+
+**Final:** APPLY HIGH — recruiter call this week.
 """
 
 
