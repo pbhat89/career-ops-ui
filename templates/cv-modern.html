@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="{{LANG}}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{{NAME}} — CV</title>
+<style>
+  @font-face {
+    font-family: 'Space Grotesk';
+    src: url('./fonts/space-grotesk-latin.woff2') format('woff2');
+    font-weight: 300 700;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+  @font-face {
+    font-family: 'DM Sans';
+    src: url('./fonts/dm-sans-latin.woff2') format('woff2');
+    font-weight: 100 1000;
+    font-style: normal;
+    font-display: swap;
+    unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+  }
+
+  :root {
+    --accent: hsl(174, 60%, 36%);
+    --accent-soft: hsl(174, 50%, 94%);
+    --ink: #1f2933;
+    --ink-soft: #4a5568;
+    --rule: #d8dee5;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    font-family: 'DM Sans', sans-serif;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--ink);
+    background: #ffffff;
+  }
+
+  .page {
+    width: 100%;
+    max-width: {{PAGE_WIDTH}};
+    margin: 0 auto;
+    padding: 2px 0;
+  }
+
+  /* === HEADER === */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 4px;
+    padding-bottom: 4px;
+  }
+  .header h1 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--ink);
+    line-height: 1.1;
+  }
+  .header .header-rule {
+    flex: 1;
+    height: 2px;
+    background: var(--accent);
+    margin-left: 14px;
+    border-radius: 1px;
+    align-self: center;
+  }
+  .contact-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px 14px;
+    font-size: 10.5px;
+    color: var(--ink-soft);
+    margin-bottom: 14px;
+  }
+  .contact-row a { color: var(--ink-soft); text-decoration: none; white-space: nowrap; }
+  .contact-row .icon {
+    color: var(--accent);
+    font-weight: 600;
+    margin-right: 3px;
+  }
+
+  /* === SECTIONS — accent bar prefix === */
+  .section { margin-bottom: 15px; }
+  .section-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--ink);
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .section-title::before {
+    content: "";
+    display: inline-block;
+    width: 14px;
+    height: 3px;
+    background: var(--accent);
+    border-radius: 1px;
+  }
+
+  .summary-text { font-size: 11px; line-height: 1.65; color: #2f2f2f; }
+
+  /* === EXPERIENCE === */
+  .job { margin-bottom: 12px; }
+  .job-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .job-company {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .job-period {
+    font-size: 10.5px;
+    color: var(--ink-soft);
+    font-weight: 500;
+    white-space: nowrap;
+  }
+  .job-role {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink);
+    margin: 1px 0 5px;
+  }
+  .job ul { padding-left: 0; list-style: none; }
+  .job li {
+    font-size: 10.5px;
+    line-height: 1.6;
+    color: var(--ink);
+    margin-bottom: 4px;
+    padding-left: 14px;
+    position: relative;
+  }
+  .job li::before {
+    content: "▸";
+    color: var(--accent);
+    position: absolute;
+    left: 0;
+    top: 0;
+    font-size: 10px;
+  }
+
+  /* === COMPETENCIES === */
+  .competencies-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+  .competency-tag {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--accent);
+    background: var(--accent-soft);
+    padding: 3px 9px;
+    border-radius: 12px;
+  }
+
+  /* === PROJECTS === */
+  .project { margin-bottom: 9px; }
+  .project-title {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--accent);
+  }
+  .project-badge {
+    font-size: 9px;
+    font-weight: 600;
+    color: #ffffff;
+    background: var(--accent);
+    padding: 1px 6px;
+    border-radius: 8px;
+    margin-left: 6px;
+  }
+  .project-desc { font-size: 10.5px; color: var(--ink); margin-top: 2px; line-height: 1.55; }
+  .project-tech { font-size: 9.5px; color: var(--ink-soft); margin-top: 2px; }
+
+  /* === EDUCATION / CERTS === */
+  .edu-item, .cert-item { margin-bottom: 6px; }
+  .edu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .edu-title { font-size: 11px; font-weight: 600; color: var(--ink); }
+  .edu-org { color: var(--accent); font-weight: 500; }
+  .edu-year { font-size: 10px; color: var(--ink-soft); white-space: nowrap; }
+  .edu-desc { font-size: 10px; color: var(--ink-soft); margin-top: 1px; }
+
+  .cert-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) max-content;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .cert-title { font-size: 10.5px; color: var(--ink); }
+  .cert-org { color: var(--accent); }
+  .cert-year { font-size: 10px; color: var(--ink-soft); }
+
+  /* === SKILLS === */
+  .skills-grid { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+  .skill-item { font-size: 10.5px; color: var(--ink); }
+  .skill-category { font-weight: 600; color: var(--accent); }
+
+  a { white-space: nowrap; }
+
+  @media print {
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    .page { padding: 0; }
+  }
+  .avoid-break, .job, .project, .edu-item, .cert-item {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <div class="header avoid-break">
+    <h1>{{NAME}}</h1>
+    <div class="header-rule"></div>
+  </div>
+  <div class="contact-row avoid-break">
+    <span><span class="icon">@</span>{{EMAIL}}</span>
+    <span><span class="icon">#</span>{{PHONE}}</span>
+    <span><span class="icon">•</span>{{LOCATION}}</span>
+    <a href="{{LINKEDIN_URL}}"><span class="icon">in</span>{{LINKEDIN_DISPLAY}}</a>
+    <a href="{{PORTFOLIO_URL}}"><span class="icon">↗</span>{{PORTFOLIO_DISPLAY}}</a>
+  </div>
+
+  <div class="section avoid-break">
+    <div class="section-title">{{SECTION_SUMMARY}}</div>
+    <div class="summary-text">{{SUMMARY_TEXT}}</div>
+  </div>
+
+  <div class="section avoid-break">
+    <div class="section-title">{{SECTION_COMPETENCIES}}</div>
+    <div class="competencies-grid">{{COMPETENCIES}}</div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">{{SECTION_EXPERIENCE}}</div>
+    {{EXPERIENCE}}
+  </div>
+
+  <div class="section avoid-break">
+    <div class="section-title">{{SECTION_PROJECTS}}</div>
+    {{PROJECTS}}
+  </div>
+
+  <div class="section avoid-break">
+    <div class="section-title">{{SECTION_EDUCATION}}</div>
+    {{EDUCATION}}
+  </div>
+
+  <div class="section avoid-break">
+    <div class="section-title">{{SECTION_CERTIFICATIONS}}</div>
+    {{CERTIFICATIONS}}
+  </div>
+
+  <div class="section avoid-break">
+    <div class="section-title">{{SECTION_SKILLS}}</div>
+    {{SKILLS}}
+  </div>
+
+</div>
+</body>
+</html>

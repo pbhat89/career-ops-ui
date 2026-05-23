@@ -20,7 +20,7 @@ Eres un worker de evaluación de ofertas de empleo for the candidate (read name 
 | llms.txt | `llms.txt (if exists)` | SIEMPRE |
 | article-digest.md | `article-digest.md (project root)` | SIEMPRE (proof points) |
 | i18n.ts | `i18n.ts (if exists, optional)` | Solo entrevistas/deep |
-| cv-template.html | `templates/cv-template.html` | Para PDF |
+| cv-template.html | `templates/{{TEMPLATE_FILE}}` | Para PDF (file chosen by `--template` slug, defaults to `cv-template.html`) |
 | generate-pdf.mjs | `generate-pdf.mjs` | Para PDF |
 
 **REGLA: NUNCA escribir en cv.md ni i18n.ts.** Son read-only.
@@ -52,6 +52,8 @@ Aplicación durante la evaluación A-G:
 | `{{REPORT_NUM}}` | Número de report (3 dígitos, zero-padded: 001, 002...) |
 | `{{DATE}}` | Fecha actual YYYY-MM-DD |
 | `{{ID}}` | ID único de la oferta en batch-input.tsv |
+| `{{TEMPLATE_SLUG}}` | Slug del template CV (classic, editorial, executive, modern, minimalist) |
+| `{{TEMPLATE_FILE}}` | Filename del template CV en `templates/` (resuelto desde `templates/cv-templates.json`). Default: `cv-template.html`. |
 
 ---
 
@@ -292,7 +294,7 @@ next_action: "{one concrete next step}"
 8. Reordena bullets de experiencia por relevancia al JD
 9. Construye competency grid (6-8 keyword phrases)
 10. Inyecta keywords en logros existentes (**NUNCA inventa**)
-11. Genera HTML completo desde template (lee `templates/cv-template.html`)
+11. Genera HTML completo desde template (lee `templates/{{TEMPLATE_FILE}}`). El template seleccionado es `{{TEMPLATE_SLUG}}`. Todos los templates usan el mismo conjunto de placeholders abajo, así que el paso de llenado es idéntico independientemente del template elegido.
 12. Escribe HTML a `/tmp/cv-candidate-{company-slug}.html`
 13. Ejecuta:
 ```bash
@@ -326,7 +328,7 @@ node generate-pdf.mjs \
 - NUNCA añadir skills the candidate doesn't have
 - Ejemplo: JD dice "RAG pipelines" y CV dice "LLM workflows with retrieval" → "RAG pipeline design and LLM orchestration workflows"
 
-**Template placeholders (en cv-template.html):**
+**Template placeholders (en `templates/{{TEMPLATE_FILE}}` — todos los templates respetan este contrato):**
 
 | Placeholder | Contenido |
 |-------------|-----------|

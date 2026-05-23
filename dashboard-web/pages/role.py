@@ -24,6 +24,7 @@ import pandas as pd
 import streamlit as st
 
 from services import tracker, reports, styling, project_root, single_eval, batch, runner, interest
+from services import cv_templates
 from services.ui_helpers import (
     safe_str, has_value, status_badge_html, score_badge_html,
     pill_html, verdict_card_html,
@@ -179,13 +180,44 @@ with side:
         missing_artifact = is_evaluated and (not pdf_exists or not cl_exists)
         can_run = has_value(job_url) and not batch_busy
 
+        # ── CV template picker ────────────────────────────────────────
+        # Choice is per-role, remembered in session_state so re-evaluating
+        # the same row keeps the user's pick. Default = registry default
+        # (classic). Picker is disabled while a batch is running so we
+        # don't change templates mid-flight on accident.
+        tpl_options = cv_templates.list_templates()
+        tpl_slugs = [t.slug for t in tpl_options]
+        tpl_default_slug = cv_templates.default_slug()
+        tpl_session_key = f"cv_template_{selected_num}"
+        if tpl_session_key not in st.session_state:
+            st.session_state[tpl_session_key] = (
+                tpl_default_slug if tpl_default_slug in tpl_slugs else tpl_slugs[0]
+            )
+        current_slug = st.session_state[tpl_session_key]
+        if current_slug not in tpl_slugs:
+            current_slug = tpl_slugs[0]
+            st.session_state[tpl_session_key] = current_slug
+        tpl_choice_slug = st.selectbox(
+            "CV template",
+            tpl_slugs,
+            index=tpl_slugs.index(current_slug),
+            key=tpl_session_key,
+            format_func=lambda s: next((t.label for t in tpl_options if t.slug == s), s),
+            disabled=batch_busy,
+            help="Visual style of the generated PDF. All templates use the same placeholders, so swapping doesn't change downstream steps.",
+        )
+        tpl_match = next((t for t in tpl_options if t.slug == tpl_choice_slug), None)
+        if tpl_match and tpl_match.blurb:
+            st.caption(tpl_match.blurb)
+
         if not is_evaluated:
             if st.button("✨ Generate evaluation", type="primary", use_container_width=True,
                          disabled=not can_run,
                          help="Score + report + tailored PDF + cover letter."):
                 try:
                     req = single_eval.SingleEvalRequest(num=int(selected_num), url=job_url,
-                                                        company=company, role=role_title)
+                                                        company=company, role=role_title,
+                                                        template=tpl_choice_slug)
                     proc = single_eval.run_single(req)
                     st.toast(f"Evaluation started (PID {proc.pid}).", icon="🚀")
                 except Exception as e:
@@ -199,7 +231,8 @@ with side:
                          use_container_width=True, disabled=not can_run):
                 try:
                     req = single_eval.SingleEvalRequest(num=int(selected_num), url=job_url,
-                                                        company=company, role=role_title)
+                                                        company=company, role=role_title,
+                                                        template=tpl_choice_slug)
                     proc = single_eval.run_single(req)
                     st.toast(f"Regeneration started (PID {proc.pid}).", icon="🚀")
                 except Exception as e:
@@ -216,7 +249,8 @@ with side:
                                        help="Replace report, PDF, cover letter with a fresh run."):
                 try:
                     req = single_eval.SingleEvalRequest(num=int(selected_num), url=job_url,
-                                                        company=company, role=role_title)
+                                                        company=company, role=role_title,
+                                                        template=tpl_choice_slug)
                     proc = single_eval.run_single(req)
                     st.toast(f"Re-evaluation started (PID {proc.pid}).", icon="🚀")
                 except Exception as e:

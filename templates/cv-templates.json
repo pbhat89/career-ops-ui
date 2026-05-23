@@ -1,0 +1,35 @@
+{
+  "default": "classic",
+  "templates": [
+    {
+      "slug": "classic",
+      "label": "ATS Classic",
+      "file": "cv-template.html",
+      "blurb": "Single-column · DM Sans + Space Grotesk · cyan/purple accents. The original ATS-optimized layout."
+    },
+    {
+      "slug": "editorial",
+      "label": "Editorial Two-Column",
+      "file": "cv-editorial.html",
+      "blurb": "Sidebar (contact, skills, languages) + main column (summary, experience, education). AltaCV-inspired, ATS-parseable."
+    },
+    {
+      "slug": "executive",
+      "label": "Executive Serif",
+      "file": "cv-executive.html",
+      "blurb": "Centered name · classical serif body · fine rule under headings. Gravitas for Head/Chief-level roles."
+    },
+    {
+      "slug": "modern",
+      "label": "Modern Accent",
+      "file": "cv-modern.html",
+      "blurb": "Single-column sans-serif with colored accent bars on section titles and icon-prefixed contact line."
+    },
+    {
+      "slug": "minimalist",
+      "label": "Minimalist Editorial",
+      "file": "cv-minimalist.html",
+      "blurb": "Large display name · numbered left rail (01, 02, …) for sections · very generous whitespace. Magazine-feel."
+    }
+  ]
+}

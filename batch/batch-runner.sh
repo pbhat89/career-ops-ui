@@ -34,6 +34,7 @@ START_FROM=0
 MAX_RETRIES=2
 MIN_SCORE=0
 MODEL=""  # empty = let claude -p use the Claude Max default
+TEMPLATE_SLUG=""  # empty = let batch-prompt fall back to its default (classic)
 
 usage() {
   cat <<'USAGE'
@@ -52,6 +53,9 @@ Options:
   --model NAME         Claude model passed to `claude -p --model` (default:
                        unset = Claude Max default). Use a cheaper model for
                        large batches, e.g. `--model claude-sonnet-4-6`.
+  --template SLUG      CV template slug for PDF generation (default: classic).
+                       Valid slugs come from templates/cv-templates.json
+                       (classic, editorial, executive, modern, minimalist).
   -h, --help           Show this help
 
 Files:
@@ -86,6 +90,7 @@ while [[ $# -gt 0 ]]; do
     --max-retries) MAX_RETRIES="$2"; shift 2 ;;
     --min-score) MIN_SCORE="$2"; shift 2 ;;
     --model) MODEL="$2"; shift 2 ;;
+    --template) TEMPLATE_SLUG="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1"; usage; exit 1 ;;
   esac
@@ -341,10 +346,26 @@ process_offer() {
 
   local log_file="$LOGS_DIR/${report_num}-${id}.log"
 
+  # Resolve template slug → filename via cv-templates.json. Falls back to
+  # the classic cv-template.html when the registry, jq, or the slug is
+  # missing — this keeps the runner working in minimal environments where
+  # the picker wasn't used.
+  local template_slug="${TEMPLATE_SLUG:-classic}"
+  local template_file="cv-template.html"
+  local registry="$PROJECT_DIR/templates/cv-templates.json"
+  if [[ -f "$registry" ]] && command -v jq &>/dev/null; then
+    local resolved
+    resolved=$(jq -r --arg slug "$template_slug" \
+      '.templates[] | select(.slug == $slug) | .file' "$registry" 2>/dev/null || true)
+    if [[ -n "$resolved" && "$resolved" != "null" ]]; then
+      template_file="$resolved"
+    fi
+  fi
+
   # Prepare system prompt with placeholders resolved
   local resolved_prompt="$BATCH_DIR/.resolved-prompt-${id}.md"
   # Escape sed delimiter characters in variables to prevent substitution breakage
-  local esc_url esc_jd_file esc_report_num esc_date esc_id
+  local esc_url esc_jd_file esc_report_num esc_date esc_id esc_template_slug esc_template_file
   esc_url="${url//\\/\\\\}"
   esc_url="${esc_url//|/\\|}"
   esc_jd_file="${jd_file//\\/\\\\}"
@@ -352,12 +373,16 @@ process_offer() {
   esc_report_num="${report_num//|/\\|}"
   esc_date="${date//|/\\|}"
   esc_id="${id//|/\\|}"
+  esc_template_slug="${template_slug//|/\\|}"
+  esc_template_file="${template_file//|/\\|}"
   sed \
     -e "s|{{URL}}|${esc_url}|g" \
     -e "s|{{JD_FILE}}|${esc_jd_file}|g" \
     -e "s|{{REPORT_NUM}}|${esc_report_num}|g" \
     -e "s|{{DATE}}|${esc_date}|g" \
     -e "s|{{ID}}|${esc_id}|g" \
+    -e "s|{{TEMPLATE_SLUG}}|${esc_template_slug}|g" \
+    -e "s|{{TEMPLATE_FILE}}|${esc_template_file}|g" \
     "$PROMPT_FILE" > "$resolved_prompt"
 
   # Launch claude -p worker.
