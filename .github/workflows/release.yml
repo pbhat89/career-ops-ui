@@ -1,7 +1,11 @@
 name: Release Please
+
+# Disabled on personal fork (pbhat89/career-ops-ui) — this fork doesn't publish
+# versioned releases to npm or GitHub Releases. The workflow stays in the repo
+# so it can be revived manually via the Actions tab if ever needed.
+# Original trigger was: on: push, branches: [main]
 on:
-  push:
-    branches: [main]
+  workflow_dispatch: {}
 
 permissions:
   contents: write
