@@ -38,8 +38,15 @@ styling.inject()
 _EXPIRED_HINTS = re.compile(r"\b(closed|expired|posting expired|withdrawn|filled)\b", re.IGNORECASE)
 INACTIVE_STATUSES = {"Discarded", "SKIP", "Rejected"}
 
-_API_KEYS = ("greenhouse", "ashby", "lever", "workday", "smartrecruiters")
-_API_METHODS = {"greenhouse_api", "ashby_api", "lever_api", "api"}
+_API_KEYS = (
+    "greenhouse", "ashby", "lever", "workday", "smartrecruiters",
+    "mycareersfuture", "mcf", "mcf_search",
+)
+_API_METHODS = {"greenhouse_api", "ashby_api", "lever_api", "api", "workday_api", "mycareersfuture_api"}
+# Provider IDs (entries that set `provider: <id>` directly bypass URL detection).
+_API_PROVIDER_IDS = {
+    "greenhouse", "ashby", "lever", "workday", "mycareersfuture", "local-parser",
+}
 
 LAST_REFRESH_PATH = "data/.last-refresh"
 
@@ -60,9 +67,24 @@ def _count_portal_apis() -> tuple[int, int]:
         if not isinstance(c, dict) or c.get("enabled") is False:
             continue
         total += 1
+        # 1. Explicit provider id (e.g. provider: mycareersfuture)
+        if str(c.get("provider") or "").lower() in _API_PROVIDER_IDS:
+            with_api += 1
+            continue
+        # 2. ATS-tagged shortcut fields (greenhouse:, ashby:, lever:, workday:, mcf:, etc.)
         if any(c.get(k) for k in _API_KEYS):
             with_api += 1
             continue
+        # 3. Recognised hostnames in careers_url
+        url = str(c.get("careers_url") or "").lower()
+        if any(host in url for host in (
+            "jobs.ashbyhq.com", "jobs.lever.co",
+            "job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
+            ".myworkdayjobs.com", "mycareersfuture.gov.sg",
+        )):
+            with_api += 1
+            continue
+        # 4. Legacy scan_method tag
         method = str(c.get("scan_method") or "").lower()
         if method in _API_METHODS:
             with_api += 1
@@ -88,12 +110,17 @@ def _portal_company_names(api_only: bool = True) -> list[str]:
         if not isinstance(c, dict) or not c.get("name") or c.get("enabled") is False:
             continue
         if api_only:
-            url = str(c.get("careers_url") or "")
-            has_api = bool(c.get("api")) or any(
-                host in url for host in (
+            # Same recognition rules as _count_portal_apis: explicit provider id,
+            # ATS-tagged shortcut fields, recognised hostnames, or workday/mcf shorthand.
+            url = str(c.get("careers_url") or "").lower()
+            has_api = (
+                str(c.get("provider") or "").lower() in _API_PROVIDER_IDS
+                or any(c.get(k) for k in _API_KEYS)
+                or any(host in url for host in (
                     "jobs.ashbyhq.com", "jobs.lever.co",
                     "job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
-                )
+                    ".myworkdayjobs.com", "mycareersfuture.gov.sg",
+                ))
             )
             if not has_api:
                 continue
@@ -117,7 +144,11 @@ def _last_scan_info() -> tuple[str, int, str]:
     new_count = 0
     if hist.exists():
         try:
-            sh = pd.read_csv(hist, sep="\t")
+            # on_bad_lines='skip' tolerates legacy header rows with fewer columns
+            # than the new provider-emitted rows (the v1.8.x scanner added a
+            # `location` column post-v1.7). Without it pandas raises ParserError
+            # and we silently fall back to "never" — which masks the real state.
+            sh = pd.read_csv(hist, sep="\t", on_bad_lines="skip")
             if "first_seen" in sh.columns and not sh.empty:
                 latest = str(sh["first_seen"].max())
                 new_count = int((sh["first_seen"] == latest).sum())
