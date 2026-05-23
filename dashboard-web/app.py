@@ -8,6 +8,7 @@ import re
 import streamlit as st
 
 from services import tracker, refresh, styling
+from services.ui_helpers import kpi_tile_grid
 
 # Mirror desk.py's expiry signals + inactive set so the sidebar "Jobs Found
 # (active)" KPI agrees with the worklist's hide-inactive filter.
@@ -113,15 +114,12 @@ with st.sidebar:
             return bool(_INDUSTRY_MATCH_RE.search(blob))
         industry_match = int(df.apply(_is_industry, axis=1).sum())
 
-        # Inline KPIs — minimal, no chips
         st.markdown(
-            f'''
-            <div style="display:flex;flex-direction:column;gap:10px;margin-top:8px;">
-              <div style="display:flex;justify-content:space-between;"><span style="color:var(--tx3);font-size:12px;">Jobs Found (active)</span><span style="color:var(--tx);font-weight:600;">{jobs_found}</span></div>
-              <div style="display:flex;justify-content:space-between;"><span style="color:var(--tx3);font-size:12px;">High-fit (≥4.3)</span><span style="color:var(--tx);font-weight:600;">{high_fit}</span></div>
-              <div style="display:flex;justify-content:space-between;"><span style="color:var(--tx3);font-size:12px;">Industry match</span><span style="color:var(--tx);font-weight:600;">{industry_match}</span></div>
-            </div>
-            ''',
+            kpi_tile_grid([
+                ("Jobs Found",     jobs_found,     False),
+                ("High-fit ≥4.3",  high_fit,       True),
+                ("Industry match", industry_match, False),
+            ]),
             unsafe_allow_html=True,
         )
     else:

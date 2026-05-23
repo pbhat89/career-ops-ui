@@ -28,7 +28,7 @@ except ImportError:
     st_autorefresh = None
 
 from services import tracker, batch, runner, styling, project_root, interest, reports
-from services.ui_helpers import safe_str, has_value
+from services.ui_helpers import safe_str, has_value, pill_html, status_strip_html
 
 styling.inject()
 
@@ -181,15 +181,21 @@ n_evaluable = len(pending_with_url)
 fn = _first_name()
 greet = f"{_greeting()}, {fn}" if fn else _greeting()
 
+# Hero — greeting + meta pills line
+_meta_pills = "".join([
+    pill_html(f"{n_total} tracked", "default", dot=True),
+    "&nbsp;",
+    pill_html(f"{n_evaluable} ready to evaluate", "accent", dot=True),
+    "&nbsp;",
+    pill_html(f"scan: {last_scan}" + (f" (+{scan_new})" if scan_new else ""), "info"),
+] + ([("&nbsp;" + pill_html(f"refreshed {last_refresh}", "muted"))] if last_refresh else []))
+
 st.markdown(
     f"""
     <div class="hero-card">
         <h1>{greet}</h1>
-        <div class="hero-sub">
-            <strong>{n_total}</strong> tracked · <strong>{n_evaluable}</strong> ready to evaluate ·
-            last scan <strong>{last_scan}</strong>
-            {f"(+{scan_new} new)" if scan_new else ""}
-            {f"· refreshed {last_refresh}" if last_refresh else ""}
+        <div class="hero-sub" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+            {_meta_pills}
         </div>
     </div>
     """,
@@ -398,9 +404,11 @@ def scan_dialog():
                 with st.expander("New offers", expanded=True):
                     offers = summary.get("offers") or []
                     if offers:
+                        _offers_df = pd.DataFrame(offers)[["company", "title", "location", "url"]]
                         st.dataframe(
-                            pd.DataFrame(offers)[["company", "title", "location", "url"]],
+                            _offers_df,
                             hide_index=True, use_container_width=True,
+                            height=min(700, 38 + 35 * (len(_offers_df) + 1)),
                             column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
                         )
             else:
@@ -645,30 +653,18 @@ if not state_df.empty:
     total = summary["total"] or 1
     done = summary["completed"] + summary["failed"]
     pct = done / total if total else 0
-    bar_width = 36
-    filled = int(pct * bar_width)
-    bar = "█" * filled + "░" * (bar_width - filled)
     status_word = "Running…" if summary["active"] else "Done"
-    color = "var(--accent)" if summary["active"] else "var(--success)"
 
     st.markdown(
-        f'''
-        <div style="background:var(--bg-card);border:1px solid var(--bd);border-radius:12px;padding:16px 20px;margin-bottom:14px;">
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-                <div>
-                    <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--tx3);">Batch evaluation</div>
-                    <div style="color:var(--tx);font-weight:600;font-size:1.05rem;margin-top:2px;">
-                        {done}/{summary["total"]} — {int(pct*100)}% · <span style="color:{color};">{status_word}</span>
-                    </div>
-                </div>
-                <div style="display:flex;gap:18px;text-align:right;">
-                    <div><div style="font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;">In flight</div><div style="color:var(--tx);font-weight:600;font-size:1.05rem;">{summary["in_progress"]}</div></div>
-                    <div><div style="font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;">Failed</div><div style="color:{"var(--danger)" if summary["failed"] else "var(--tx)"};font-weight:600;font-size:1.05rem;">{summary["failed"]}</div></div>
-                </div>
-            </div>
-            <div style="font-family:'JetBrains Mono',monospace;font-size:14px;letter-spacing:0;color:{color};line-height:1.2;">{bar}</div>
-        </div>
-        ''',
+        status_strip_html(
+            label="Batch evaluation",
+            headline=f'{done}/{summary["total"]} — {int(pct*100)}% · {status_word}',
+            stats=[
+                ("In flight", summary["in_progress"]),
+                ("Failed", summary["failed"]),
+            ],
+            progress=pct,
+        ),
         unsafe_allow_html=True,
     )
 
@@ -920,11 +916,18 @@ worklist_view = worklist_view[[
 # Streamlit's data_editor supports selection events. We use it so a single
 # click anywhere in the row opens role.py — no more two-step "tick then click".
 
+# Auto-expand the worklist to fit up to ~50 rows; clamp so it never exceeds
+# typical laptop viewport. Streamlit row ≈ 35 px, header ≈ 38 px.
+_row_h = 35
+_min_height = 460
+_max_height = 1800
+_dynamic_height = min(_max_height, max(_min_height, 38 + _row_h * (len(worklist_view) + 1)))
+
 event = st.dataframe(
     worklist_view,
     use_container_width=True,
     hide_index=True,
-    height=460,
+    height=_dynamic_height,
     key="worklist_table",
     on_select="rerun",
     selection_mode="multi-row",
@@ -971,11 +974,11 @@ if picked_nums:
     picked_full = worklist[worklist["num"].isin(picked_nums)].copy()
     all_have_url = bool(len(picked_full)) and picked_full["job_url"].fillna("").astype(str).str.strip().ne("").all()
 
+    _ids_preview = ", ".join(f"#{n}" for n in picked_nums[:6]) + (" …" if len(picked_nums) > 6 else "")
     st.markdown(
-        f'<div style="color:var(--tx2);font-size:0.85rem;margin:10px 0 6px;">'
-        f'<strong>{len(picked_nums)}</strong> selected · '
-        f'<span style="color:var(--tx3);">#{", #".join(str(n) for n in picked_nums[:6])}'
-        f'{" …" if len(picked_nums) > 6 else ""}</span>'
+        f'<div style="display:flex;gap:8px;align-items:center;margin:12px 0 8px;">'
+        f'{pill_html(f"{len(picked_nums)} selected", "accent", dot=True)}'
+        f'<span style="color:var(--tx3);font-size:0.82rem;">{_ids_preview}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )

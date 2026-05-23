@@ -24,7 +24,10 @@ import pandas as pd
 import streamlit as st
 
 from services import tracker, reports, styling, project_root, single_eval, batch, runner, interest
-from services.ui_helpers import safe_str, has_value, status_badge_html, score_badge_html
+from services.ui_helpers import (
+    safe_str, has_value, status_badge_html, score_badge_html,
+    pill_html, verdict_card_html,
+)
 
 styling.inject()
 
@@ -361,27 +364,8 @@ with main:
         )
         st.stop()
 
-    # ── Fit verdict ──
-    if score is None:
-        verdict, vc, bg, bd = "— Not scored", "#888", "rgba(136,136,136,0.08)", "rgba(136,136,136,0.30)"
-    elif score >= 4.5:
-        verdict, vc, bg, bd = "✓ Strong fit — apply", "#3DB985", "rgba(61,185,133,0.10)", "rgba(61,185,133,0.35)"
-    elif score >= 4.0:
-        verdict, vc, bg, bd = "✓ Good fit — likely apply", "#6EE7B7", "rgba(110,231,183,0.10)", "rgba(110,231,183,0.30)"
-    elif score >= 3.5:
-        verdict, vc, bg, bd = "⚠ Borderline — review carefully", "#FBBF24", "rgba(251,191,36,0.10)", "rgba(251,191,36,0.35)"
-    else:
-        verdict, vc, bg, bd = "✗ Low fit — recommend skip", "#FDA4AF", "rgba(253,164,175,0.10)", "rgba(253,164,175,0.35)"
-
-    tldr = (report.tldr or "").strip() or "No TL;DR captured in report."
-    score_str = f"{score:.1f}/5" if score is not None else "—"
     st.markdown(
-        f'<div style="background:{bg};border:1px solid {bd};border-radius:10px;'
-        f'padding:12px 16px;margin-bottom:14px;">'
-        f'<div style="color:{vc};font-weight:600;font-size:0.95rem;margin-bottom:4px;">'
-        f'{verdict} · {score_str}</div>'
-        f'<div style="color:var(--tx2);font-size:0.88rem;line-height:1.4;">{tldr}</div>'
-        f'</div>',
+        verdict_card_html(score, (report.tldr or "").strip()),
         unsafe_allow_html=True,
     )
 

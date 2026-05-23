@@ -10,6 +10,7 @@ import pandas as pd
 import streamlit as st
 
 from services import tracker, runner, styling, project_root
+from services.ui_helpers import pill_html
 
 styling.inject()
 
@@ -34,10 +35,16 @@ def _dark_chart(c: alt.Chart) -> alt.Chart:
     )
 
 
-st.title("Signals")
+df = tracker.load_applications()
+st.markdown(
+    f'<div style="display:flex;align-items:center;gap:10px;margin-top:0.3rem;">'
+    f'<h1 style="margin:0;">Signals</h1>'
+    f'{pill_html(f"{len(df)} applications", "default", dot=True)}'
+    f'</div>',
+    unsafe_allow_html=True,
+)
 st.caption("Where the pipeline leaks, what's working, where new offers come from.")
 
-df = tracker.load_applications()
 if df.empty:
     st.info("No applications yet.")
     st.stop()

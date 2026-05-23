@@ -45,10 +45,14 @@ def test_styling_injects_without_error(monkeypatch):
     monkeypatch.setattr("streamlit.markdown", fake_md)
     styling.inject()
     assert captured.get("unsafe") is True
-    assert "Outfit" in captured["html"]      # new font
+    # Inter is the UI font in the shadcn-style revamp (was Outfit pre-v2)
+    assert "Inter" in captured["html"]
     assert "#44D49A" in captured["html"]     # brighter accent green (post-revamp)
     assert "row-progress" in captured["html"]  # per-row progress class
     assert "action-card" in captured["html"]   # the card grid CSS
+    # Tiles and pills introduced in the shadcn-style revamp
+    assert "kpi-tile" in captured["html"]
+    assert "pill pill-default" in captured["html"] or "pill-default" in captured["html"]
 
 
 def test_runner_helpers_exist():
