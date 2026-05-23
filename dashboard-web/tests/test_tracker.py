@@ -74,3 +74,64 @@ def test_update_status_raises_for_missing_row(temp_root):
 def test_canonical_statuses_includes_expected(temp_root):
     expected = {"Pending", "Evaluated", "Applied", "Interview", "Offer", "Rejected", "Discarded", "SKIP", "Watchlist"}
     assert expected.issubset(set(tracker.CANONICAL_STATUSES))
+
+
+# ── Pipeline.md inbox helpers ──────────────────────────────────────────
+
+def test_append_to_pipeline_creates_file(temp_root):
+    p = tracker.append_to_pipeline("https://example.com/new-job-1", "FooCo", "Head of AI")
+    body = p.read_text(encoding="utf-8")
+    assert "## Pending" in body
+    assert "- [ ] https://example.com/new-job-1" in body
+    assert "FooCo" in body
+    assert "Head of AI" in body
+
+
+def test_append_to_pipeline_is_idempotent(temp_root):
+    tracker.append_to_pipeline("https://example.com/dupe", "A", "B")
+    tracker.append_to_pipeline("https://example.com/dupe", "A", "B")
+    body = tracker.pipeline_path().read_text(encoding="utf-8")
+    assert body.count("https://example.com/dupe") == 1
+
+
+def test_append_to_pipeline_rejects_non_url(temp_root):
+    with pytest.raises(ValueError):
+        tracker.append_to_pipeline("just-some-text")
+
+
+def test_read_pipeline_inbox_handles_missing(temp_root):
+    # No pipeline.md yet in the fixture
+    data = tracker.read_pipeline_inbox()
+    assert data == {"pending": [], "processed": []}
+
+
+def test_read_pipeline_inbox_parses_sections(temp_root):
+    tracker.pipeline_path().write_text(
+        "# Pipeline\n\n"
+        "## Pending\n"
+        "- [ ] https://a.example.com | FooCo | Head of AI\n"
+        "- [!] https://b.example.com | Locked: login required\n"
+        "\n## Processed\n"
+        "- [x] #042 | https://c.example.com | BarCo | Dir DS | 4.1/5 | PDF ✅\n",
+        encoding="utf-8",
+    )
+    data = tracker.read_pipeline_inbox()
+    assert len(data["pending"]) == 2
+    assert data["pending"][0]["url"] == "https://a.example.com"
+    assert data["pending"][0]["company"] == "FooCo"
+    assert data["pending"][0]["status"] == " "
+    assert data["pending"][1]["status"] == "!"
+    assert len(data["processed"]) == 1
+    assert data["processed"][0]["url"] == "https://c.example.com"
+
+
+def test_mark_pipeline_processed_moves_row(temp_root):
+    tracker.append_to_pipeline("https://move.example.com", "MoveCo", "PM")
+    assert tracker.mark_pipeline_processed("https://move.example.com")
+    data = tracker.read_pipeline_inbox()
+    assert all(e["url"] != "https://move.example.com" for e in data["pending"])
+    assert any(e["url"] == "https://move.example.com" for e in data["processed"])
+
+
+def test_mark_pipeline_processed_returns_false_for_unknown(temp_root):
+    assert tracker.mark_pipeline_processed("https://never-added.example.com") is False

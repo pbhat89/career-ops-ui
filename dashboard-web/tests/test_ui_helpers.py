@@ -38,17 +38,26 @@ def test_has_value():
 
 def test_score_tier_returns_color_for_high():
     assert score_tier(4.6).startswith("#")
-    assert score_tier(5.0) == "#10b981"  # emerald
-    assert score_tier(4.0) == "#22d3ee"  # cyan
+    # Accent green can shift between palette revisions — assert the family,
+    # not the exact hex.
+    assert score_tier(5.0).lower() in {"#3db985", "#44d49a", "#34b27f"}
+    assert score_tier(4.0) == "#6EE7B7"  # soft green
 
 
-def test_score_tier_gray_for_none():
-    assert score_tier(None) == "#6b7280"
-    assert score_tier(float("nan")) == "#6b7280"
+def test_score_tier_neutral_for_none():
+    assert score_tier(None) == "#8C9196"
+    assert score_tier(float("nan")) == "#8C9196"
 
 
 def test_score_tier_red_for_low():
-    assert score_tier(2.0) == "#ef4444"
+    assert score_tier(2.0) == "#FDA4AF"
+
+
+def test_status_badge_includes_in_progress():
+    html = status_badge_html("In progress")
+    assert "In progress" in html
+    # In-progress should use amber/yellow, not the default gray
+    assert "FBBF24" in html or "fbbf24" in html.lower()
 
 
 def test_status_badge_html_contains_label():

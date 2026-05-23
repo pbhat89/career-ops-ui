@@ -1,8 +1,17 @@
-"""Desk — landing. Hero + bulk-action cards + worklist + below-fold widgets."""
+"""Desk — landing page.
+
+Layout:
+  1. Hero (greeting + last-scan freshness banner)
+  2. Action strip: Scan · Evaluate · Tidy · More
+  3. Live batch progress (per-row indicator + global summary)
+  4. Worklist table — single-click row selection opens role.py
+  5. Below-the-fold signals
+"""
 
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 
 import pandas as pd
@@ -10,16 +19,16 @@ import streamlit as st
 
 try:
     import yaml  # type: ignore
-except Exception:  # pragma: no cover — graceful degradation if pyyaml missing
+except Exception:
     yaml = None
 
 try:
     from streamlit_autorefresh import st_autorefresh
 except ImportError:
-    st_autorefresh = None  # graceful fallback
+    st_autorefresh = None
 
 from services import tracker, batch, runner, styling, project_root, interest, reports
-from services.ui_helpers import safe_str, has_value, status_badge_html, score_badge_html
+from services.ui_helpers import safe_str, has_value
 
 styling.inject()
 
@@ -29,18 +38,13 @@ styling.inject()
 _EXPIRED_HINTS = re.compile(r"\b(closed|expired|posting expired|withdrawn|filled)\b", re.IGNORECASE)
 INACTIVE_STATUSES = {"Discarded", "SKIP", "Rejected"}
 
-# Keys on a tracked_companies[] entry that mean scan.mjs can hit a real API.
 _API_KEYS = ("greenhouse", "ashby", "lever", "workday", "smartrecruiters")
 _API_METHODS = {"greenhouse_api", "ashby_api", "lever_api", "api"}
 
+LAST_REFRESH_PATH = "data/.last-refresh"
+
 
 def _count_portal_apis() -> tuple[int, int]:
-    """Return (api_enabled, total_enabled) tracked companies from portals.yml.
-
-    api_enabled = companies with a Greenhouse/Ashby/Lever-style endpoint
-    `scan.mjs` can actually hit. Falls back gracefully if pyyaml or the
-    file is unavailable.
-    """
     path = project_root() / "portals.yml"
     if yaml is None or not path.exists():
         return 0, 0
@@ -51,12 +55,9 @@ def _count_portal_apis() -> tuple[int, int]:
     companies = data.get("tracked_companies") or []
     if not isinstance(companies, list):
         return 0, 0
-    total = 0
-    with_api = 0
+    total = with_api = 0
     for c in companies:
-        if not isinstance(c, dict):
-            continue
-        if c.get("enabled") is False:
+        if not isinstance(c, dict) or c.get("enabled") is False:
             continue
         total += 1
         if any(c.get(k) for k in _API_KEYS):
@@ -68,6 +69,38 @@ def _count_portal_apis() -> tuple[int, int]:
     return with_api, total
 
 
+def _portal_company_names(api_only: bool = True) -> list[str]:
+    """Return tracked_companies names from portals.yml — for the scan dialog dropdown.
+
+    api_only=True keeps only entries the zero-token scanner can actually hit
+    (Greenhouse / Ashby / Lever endpoints). The remaining ~90% are WebSearch-only
+    and listing them here just leads to "0 new offers" surprises.
+    """
+    path = project_root() / "portals.yml"
+    if yaml is None or not path.exists():
+        return []
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return []
+    out: list[str] = []
+    for c in (data.get("tracked_companies") or []):
+        if not isinstance(c, dict) or not c.get("name") or c.get("enabled") is False:
+            continue
+        if api_only:
+            url = str(c.get("careers_url") or "")
+            has_api = bool(c.get("api")) or any(
+                host in url for host in (
+                    "jobs.ashbyhq.com", "jobs.lever.co",
+                    "job-boards.greenhouse.io", "job-boards.eu.greenhouse.io",
+                )
+            )
+            if not has_api:
+                continue
+        out.append(str(c["name"]).strip())
+    return sorted(out, key=str.lower)
+
+
 def _is_expired_row(row) -> bool:
     if row.get("status") in INACTIVE_STATUSES:
         return True
@@ -77,19 +110,41 @@ def _is_expired_row(row) -> bool:
     return False
 
 
-def _last_scan_info() -> tuple[str, int]:
+def _last_scan_info() -> tuple[str, int, str]:
+    """(latest first_seen YYYY-MM-DD, new on that date, last-refresh ISO timestamp)."""
     hist = project_root() / "data" / "scan-history.tsv"
-    if not hist.exists():
-        return "never", 0
+    latest = "never"
+    new_count = 0
+    if hist.exists():
+        try:
+            sh = pd.read_csv(hist, sep="\t")
+            if "first_seen" in sh.columns and not sh.empty:
+                latest = str(sh["first_seen"].max())
+                new_count = int((sh["first_seen"] == latest).sum())
+        except Exception:
+            pass
+    marker = project_root() / LAST_REFRESH_PATH
+    last_refresh = ""
+    if marker.exists():
+        try:
+            last_refresh = marker.read_text(encoding="utf-8").strip()[:19]
+        except Exception:
+            last_refresh = ""
+    return latest, new_count, last_refresh
+
+
+def _scan_age_days() -> float | None:
+    """Days since data/.last-refresh — falls back to scan-history mtime."""
+    p = project_root() / LAST_REFRESH_PATH
+    if not p.exists():
+        p = project_root() / "data" / "scan-history.tsv"
+        if not p.exists():
+            return None
     try:
-        sh = pd.read_csv(hist, sep="\t")
-        if "first_seen" not in sh.columns:
-            return "unknown", 0
-        latest = sh["first_seen"].max()
-        new_count = int((sh["first_seen"] == latest).sum())
-        return str(latest), new_count
+        age = dt.datetime.now() - dt.datetime.fromtimestamp(p.stat().st_mtime)
+        return age.total_seconds() / 86400.0
     except Exception:
-        return "unknown", 0
+        return None
 
 
 def _greeting() -> str:
@@ -100,8 +155,7 @@ def _greeting() -> str:
     return "Good evening"
 
 
-def _candidate_first_name() -> str:
-    """Read first name from config/profile.yml; blank if unavailable."""
+def _first_name() -> str:
     if yaml is None:
         return ""
     path = project_root() / "config" / "profile.yml"
@@ -118,89 +172,146 @@ def _candidate_first_name() -> str:
 # ── Hero ───────────────────────────────────────────────────────────────
 
 df = tracker.load_applications()
-last_scan, scan_new = _last_scan_info()
+last_scan, scan_new, last_refresh = _last_scan_info()
+scan_age = _scan_age_days()
 
 n_total = len(df)
-n_pending_total = int((df["status"] == "Pending").sum()) if not df.empty else 0
 pending_with_url = batch.evaluable_pending(df) if not df.empty else df
 n_evaluable = len(pending_with_url)
+fn = _first_name()
+greet = f"{_greeting()}, {fn}" if fn else _greeting()
 
-_first_name = _candidate_first_name()
-_hero_greeting = f"{_greeting()}, {_first_name}" if _first_name else _greeting()
 st.markdown(
-    f'''
+    f"""
     <div class="hero-card">
-        <h1>{_hero_greeting}</h1>
+        <h1>{greet}</h1>
         <div class="hero-sub">
-            {n_total} apps tracked · {n_evaluable} ready to evaluate · last scan
-            <strong>{last_scan}</strong> ({scan_new} new on that date)
+            <strong>{n_total}</strong> tracked · <strong>{n_evaluable}</strong> ready to evaluate ·
+            last scan <strong>{last_scan}</strong>
+            {f"(+{scan_new} new)" if scan_new else ""}
+            {f"· refreshed {last_refresh}" if last_refresh else ""}
         </div>
     </div>
-    ''',
+    """,
     unsafe_allow_html=True,
 )
 
+# Freshness banner — surfaces stale scans without making it noisy.
+if scan_age is not None and scan_age > 3:
+    days = int(scan_age)
+    st.markdown(
+        f'<div class="banner banner-warn">'
+        f'<strong>Scan is {days} day{"s" if days != 1 else ""} old.</strong> '
+        f'Run a fresh scan to catch new postings.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-# ── Bulk action cards ──────────────────────────────────────────────────
 
-st.markdown('<div class="section-label">Bulk actions</div>', unsafe_allow_html=True)
-ac1, ac2, ac3 = st.columns(3, gap="medium")
+# ── Action strip — every /career-ops command as a card ────────────────
 
-with ac1:
-    with st.container(border=True):
-        st.markdown(
-            f'<div style="font-size:0.78rem;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Evaluate</div>'
-            f'<div style="color:var(--tx);font-weight:600;font-size:1.05rem;margin-bottom:4px;">{n_evaluable} pending</div>'
-            f'<div style="color:var(--tx2);font-size:0.85rem;margin-bottom:14px;">Score, report, PDF, cover letter for every row with a JD URL.</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("Run evaluation", type="primary", use_container_width=True, disabled=(n_evaluable == 0), key="bulk_eval_btn"):
-            st.session_state["show_eval_dialog"] = True
+# Count pending inbox URLs once for the card headline.
+_inbox = tracker.read_pipeline_inbox()
+n_inbox = len(_inbox["pending"])
+n_expired = int(df.apply(_is_expired_row, axis=1).sum()) if not df.empty else 0
 
-with ac2:
-    with st.container(border=True):
-        st.markdown(
-            '<div style="font-size:0.78rem;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Scan</div>'
-            '<div style="color:var(--tx);font-weight:600;font-size:1.05rem;margin-bottom:4px;">Portals</div>'
-            '<div style="color:var(--tx2);font-size:0.85rem;margin-bottom:14px;">Greenhouse · Ashby · Lever · efinancialcareers · MyCareersFuture.</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("Open scanner", use_container_width=True, key="bulk_scan_btn"):
-            st.session_state["show_scan_dialog"] = True
+st.markdown('<div class="section-label">Quick actions</div>', unsafe_allow_html=True)
 
-with ac3:
-    with st.container(border=True):
-        n_expired = int(df.apply(_is_expired_row, axis=1).sum()) if not df.empty else 0
-        st.markdown(
-            f'<div style="font-size:0.78rem;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">Tidy</div>'
-            f'<div style="color:var(--tx);font-weight:600;font-size:1.05rem;margin-bottom:4px;">{n_expired} expired postings</div>'
-            f'<div style="color:var(--tx2);font-size:0.85rem;margin-bottom:14px;">Mark closed/withdrawn postings as Discarded.</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button("Tidy expired", use_container_width=True, key="bulk_tidy_btn", disabled=(n_expired == 0)):
-            moved = 0
-            if not df.empty:
-                for _, r in df.iterrows():
-                    if r["status"] == "Pending" and _is_expired_row(r):
-                        try:
-                            tracker.update_status(int(r["num"]), "Discarded")
-                            moved += 1
-                        except Exception:
-                            pass
-            if moved:
-                st.toast(f"Moved {moved} expired Pending → Discarded", icon="🗑️")
-                st.cache_data.clear()
-                st.rerun()
-            else:
-                st.toast("Nothing to clean up.", icon="✅")
+# Row 1 — the three "incoming" actions
+r1c1, r1c2, r1c3 = st.columns(3, gap="small")
+with r1c1:
+    st.markdown(
+        '<div class="action-card">'
+        '<div class="ac-label">Paste JD</div>'
+        '<div class="ac-headline">Add a URL</div>'
+        '<div class="ac-sub">Drop a job posting URL here — adds it to the inbox for evaluation.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Paste JD URL", use_container_width=True, key="bulk_paste_btn", type="primary"):
+        st.session_state["show_paste_dialog"] = True
+with r1c2:
+    st.markdown(
+        '<div class="action-card">'
+        '<div class="ac-label">Scan</div>'
+        '<div class="ac-headline">Fresh portal sweep</div>'
+        '<div class="ac-sub">Greenhouse · Ashby · Lever — skips anything already in the tracker.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Run scan", use_container_width=True, key="bulk_scan_btn", type="primary"):
+        st.session_state["show_scan_dialog"] = True
+with r1c3:
+    st.markdown(
+        f'<div class="action-card">'
+        f'<div class="ac-label">Inbox</div>'
+        f'<div class="ac-headline">{n_inbox} pending URL{"s" if n_inbox != 1 else ""}</div>'
+        f'<div class="ac-sub">Process URLs accumulated in <code>data/pipeline.md</code>.</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Open inbox", use_container_width=True, key="bulk_inbox_btn",
+                 disabled=(n_inbox == 0 and not _inbox["processed"])):
+        st.session_state["show_inbox_dialog"] = True
+
+# Row 2 — the "outgoing" actions
+r2c1, r2c2, r2c3 = st.columns(3, gap="small")
+with r2c1:
+    st.markdown(
+        f'<div class="action-card">'
+        f'<div class="ac-label">Evaluate</div>'
+        f'<div class="ac-headline">{n_evaluable} pending row{"s" if n_evaluable != 1 else ""}</div>'
+        f'<div class="ac-sub">Score · report · tailored PDF · cover letter (parallel workers).</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Evaluate all pending", use_container_width=True, type="primary",
+                 disabled=(n_evaluable == 0), key="bulk_eval_btn"):
+        st.session_state["show_eval_dialog"] = True
+with r2c2:
+    st.markdown(
+        f'<div class="action-card">'
+        f'<div class="ac-label">Tidy</div>'
+        f'<div class="ac-headline">{n_expired} expired</div>'
+        f'<div class="ac-sub">Mark closed / withdrawn / filled postings as Discarded.</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Tidy expired", use_container_width=True, key="bulk_tidy_btn",
+                 disabled=(n_expired == 0)):
+        moved = 0
+        for _, r in df.iterrows():
+            if r["status"] == "Pending" and _is_expired_row(r):
+                try:
+                    tracker.update_status(int(r["num"]), "Discarded")
+                    moved += 1
+                except Exception:
+                    pass
+        if moved:
+            st.toast(f"Moved {moved} expired Pending → Discarded", icon="🗑️")
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.toast("Nothing to clean up.", icon="✅")
+with r2c3:
+    st.markdown(
+        '<div class="action-card">'
+        '<div class="ac-label">Tools</div>'
+        '<div class="ac-headline">Diagnostics</div>'
+        '<div class="ac-sub">Liveness · normalize · dedup · pattern analysis · update check.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+    if st.button("Open diagnostics", use_container_width=True, key="bulk_diag_btn"):
+        st.session_state["show_diag_dialog"] = True
 
 
 # ── Dialogs ────────────────────────────────────────────────────────────
 
 @st.dialog("Evaluate pending offers", width="large")
 def evaluate_dialog(rows: pd.DataFrame):
-    st.write(f"This will run **{len(rows)}** evaluation(s) — each produces a score, report, tailored PDF, and cover letter.")
-    st.caption("Each evaluation calls `claude -p` (uses Claude Max subscription tokens). Runs in background; UI stays usable.")
+    st.write(f"Run **{len(rows)}** evaluation(s) — each produces a score, report, tailored PDF, and cover letter.")
+    st.caption("Each evaluation calls `claude -p` (uses Claude Max tokens). Workers run in parallel; UI stays usable.")
 
     st.dataframe(
         rows[["num", "company", "role", "job_url"]].rename(columns={
@@ -208,18 +319,22 @@ def evaluate_dialog(rows: pd.DataFrame):
         }),
         hide_index=True,
         use_container_width=True,
-        height=240,
+        height=220,
         column_config={"URL": st.column_config.LinkColumn("URL", display_text="open")},
     )
 
-    parallel = st.slider("Parallel workers", 1, 4, 1, help="More = faster but more concurrent token use.")
-    dry_run = st.checkbox("Dry run (no actual evaluation, just show what would run)", value=False)
+    default_parallel = min(3, max(2, len(rows))) if len(rows) > 1 else 1
+    parallel = st.slider(
+        "Parallel workers", 1, 4, default_parallel,
+        help="Default 2-3. Higher = faster but more concurrent token use.",
+    )
+    dry_run = st.checkbox("Dry run (preview only)", value=False)
 
     c1, c2 = st.columns(2)
-    if c1.button("Cancel", use_container_width=True):
+    if c1.button("Cancel", use_container_width=True, key="eval_cancel"):
         st.session_state["show_eval_dialog"] = False
         st.rerun()
-    if c2.button("Start batch", type="primary", use_container_width=True):
+    if c2.button("Start batch", type="primary", use_container_width=True, key="eval_start"):
         if not batch.bash_available():
             st.error("`bash` not on PATH. Install Git Bash or WSL.")
             return
@@ -231,141 +346,324 @@ def evaluate_dialog(rows: pd.DataFrame):
         try:
             proc = batch.start_batch(parallel=parallel, dry_run=dry_run)
             st.session_state["show_eval_dialog"] = False
-            st.toast(f"Batch started (PID {proc.pid}). Watch progress below.", icon="🚀")
+            st.toast(f"Batch started (PID {proc.pid}) with {parallel} worker(s).", icon="🚀")
             st.rerun()
         except Exception as e:
             st.error(f"Failed to start batch: {e}")
 
 
-_NEW_OFFER_PATTERNS = (
-    re.compile(r"(\d+)\s+new\s+offer", re.IGNORECASE),
-    re.compile(r"added\s+(\d+)", re.IGNORECASE),
-    re.compile(r"(\d+)\s+added", re.IGNORECASE),
-)
-
-
-def _parse_new_offers(stdout: str) -> int | None:
-    """Best-effort count of new offers from scan.mjs stdout. None if unknown."""
-    if not stdout:
-        return None
-    for line in stdout.splitlines()[::-1]:
-        for pat in _NEW_OFFER_PATTERNS:
-            m = pat.search(line)
-            if m:
-                try:
-                    return int(m.group(1))
-                except ValueError:
-                    pass
-    return None
-
-
 @st.dialog("Scan portals")
 def scan_dialog():
-    st.caption("Scan for new roles")
+    api_count, total_count = _count_portal_apis()
+    st.markdown(
+        f'<div style="color:var(--tx3);font-size:0.85rem;margin-bottom:8px;">'
+        f'{api_count} of {total_count} tracked companies have an API endpoint. '
+        f'Last scan: <strong>{last_scan}</strong>'
+        f'{f" · refreshed {last_refresh}" if last_refresh else ""}.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
-    api_count, _total_count = _count_portal_apis()
+    portal_names = _portal_company_names(api_only=True)
+    use_filter = st.checkbox("Restrict to one company", value=False, key="scan_use_filter")
+    company = ""
+    if use_filter and portal_names:
+        st.caption(
+            f"Only the **{len(portal_names)} API-backed** companies are listed — "
+            f"WebSearch-only entries can't be scanned from here."
+        )
+        company = st.selectbox(
+            "Company",
+            options=portal_names, index=0, key="scan_company_pick",
+        )
+    elif use_filter:
+        company = st.text_input("Company name", placeholder="e.g. Anthropic", key="scan_company_text")
 
-    company = st.text_input("Restrict to a company (optional)", placeholder="e.g. Anthropic")
-    dry_run = st.checkbox("Dry run (preview only)", value=False)
+    dry_run = st.checkbox("Dry run (preview only — no files written)", value=False, key="scan_dryrun")
 
     c1, c2 = st.columns(2)
     if c1.button("Cancel", use_container_width=True, key="scan_cancel"):
         st.session_state["show_scan_dialog"] = False
         st.rerun()
-    run_clicked = c2.button("Run scan", type="primary", use_container_width=True, key="scan_run")
+    if c2.button("Run scan", type="primary", use_container_width=True, key="scan_run"):
+        with st.spinner("Scanning portals…"):
+            summary = runner.scan_summary(dry_run=dry_run, company=company.strip() or None)
 
-    _ls, _ = _last_scan_info()
-    st.caption(f"Last scan: {_ls if _ls else 'never'}")
-
-    if run_clicked:
-        with st.spinner("Scanning…"):
-            result = runner.scan(dry_run=dry_run, company=company or None)
-
-        stdout = result.stdout or ""
-        stderr = result.stderr or ""
-
-        if result.ok:
-            new_offers = _parse_new_offers(stdout)
-            if new_offers is None and api_count == 0:
-                st.error("Scan finished with 0 new offers — no companies have an API endpoint configured.")
-            elif new_offers == 0:
-                st.warning(
-                    "Scan complete — **0 new offers**. "
-                    + (
-                        "Try adding more API-enabled companies in **Settings → Portals**."
-                        if api_count == 0
-                        else "Either nothing new was posted, or your title filters excluded everything."
-                    )
-                )
-            elif new_offers and new_offers > 0:
-                st.success(f"Scan complete — **{new_offers} new offer(s)** added as Pending.")
+        if summary.get("ok"):
+            n_new = int(summary.get("new_offers") or 0)
+            scanned = int(summary.get("companies_scanned") or 0)
+            dupes = int(summary.get("duplicates") or 0)
+            if n_new > 0:
+                st.success(f"Found **{n_new} new offer(s)** across {scanned} companies · {dupes} duplicates skipped.")
+                with st.expander("New offers", expanded=True):
+                    offers = summary.get("offers") or []
+                    if offers:
+                        st.dataframe(
+                            pd.DataFrame(offers)[["company", "title", "location", "url"]],
+                            hide_index=True, use_container_width=True,
+                            column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
+                        )
             else:
-                st.success("Scan complete.")
-        else:
-            st.error("Scan failed.")
+                hint = (
+                    "Enable more API-backed companies in **Settings → Portals**."
+                    if api_count == 0 else
+                    "Either nothing new was posted, or the title filter excluded everything. "
+                    "Loosen `title_filter.positive` to widen the net."
+                )
+                st.warning(f"0 new offers across {scanned} companies. {hint}")
 
-        # Always show output so 1-second silent runs are no longer confusing.
-        st.markdown("**Scanner output**")
-        body = stdout if stdout.strip() else "(scanner produced no stdout)"
-        tail = body.splitlines()[-25:]
-        st.code("\n".join(tail) if tail else body, language="text")
-        if stderr.strip():
-            with st.expander("stderr", expanded=not result.ok):
-                st.code(stderr[-2000:], language="text")
+            # Persist a fresh .last-refresh stamp so the freshness banner clears.
+            try:
+                marker = project_root() / LAST_REFRESH_PATH
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(dt.datetime.now().isoformat(), encoding="utf-8")
+            except Exception:
+                pass
+
+            errors = summary.get("errors") or []
+            if errors:
+                with st.expander(f"{len(errors)} API error(s)"):
+                    for e in errors:
+                        st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
+        else:
+            errors = summary.get("errors") or []
+            hint = summary.get("hint")
+            if hint == "no-api":
+                # Name matched but it's a WebSearch-only entry — that's expected
+                # for ~90% of portals.yml. Show as info, not error.
+                names = ", ".join(summary.get("matched_names") or [])
+                st.info(
+                    f"**{names}** has no Greenhouse / Ashby / Lever endpoint, so the zero-token "
+                    f"scanner can't reach it. Add an `api:` URL in **Settings → Portals**, or use "
+                    f"`/career-ops scan` in Claude Code to do a WebSearch-based scan."
+                )
+            elif hint == "no-match":
+                st.warning(
+                    f"No company in portals.yml matches **{summary.get('filter_company','?')}**. "
+                    f"Check the spelling — picker below shows all enabled companies."
+                )
+            else:
+                st.error("Scan failed.")
+                if errors:
+                    for e in errors:
+                        st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
+                else:
+                    stderr = summary.get("_raw_stderr") or ""
+                    if stderr.strip():
+                        st.code(stderr[-1500:], language="text")
 
         st.cache_data.clear()
 
 
-if st.session_state.get("show_eval_dialog") and not df.empty:
-    evaluate_dialog(pending_with_url)
-if st.session_state.get("show_scan_dialog"):
+@st.dialog("Diagnostics", width="large")
+def diagnostics_dialog():
+    st.caption("Maintenance scripts — safe by default (dry runs preview). Apply when you're happy.")
+
+    tabs = st.tabs(["Liveness", "Normalize statuses", "Dedup tracker", "Update check", "Verify"])
+
+    with tabs[0]:
+        st.write("Check Active applications' JD URLs (caps at 20 per run).")
+        if st.button("Run liveness check", key="diag_liveness", type="primary"):
+            urls = (
+                df[df["status"].isin(["Applied", "Responded", "Interview"]) & df["job_url"].notna()]
+                ["job_url"].dropna().unique().tolist()[:20]
+            )
+            if not urls:
+                st.info("No active applications with JD URLs to check.")
+            else:
+                with st.spinner(f"Checking {len(urls)} URLs…"):
+                    r = runner.check_liveness(urls)
+                if r.ok:
+                    st.success(f"Checked {len(urls)} URLs.")
+                else:
+                    st.error("Liveness check failed.")
+                st.code((r.stdout or r.stderr)[-2000:], language="text")
+
+    with tabs[1]:
+        st.write("Normalize the Status column to canonical values (Pending / Evaluated / Applied / …).")
+        nd1, nd2 = st.columns(2)
+        if nd1.button("Dry run", key="diag_norm_dry"):
+            r = runner.normalize_statuses(dry_run=True)
+            st.code((r.stdout or r.stderr)[-2000:], language="text")
+        if nd2.button("Apply", key="diag_norm_apply", type="primary"):
+            r = runner.normalize_statuses(dry_run=False)
+            st.code((r.stdout or r.stderr)[-2000:], language="text")
+            st.cache_data.clear()
+
+    with tabs[2]:
+        st.write("Detect duplicate company+role rows in applications.md and merge them.")
+        dd1, dd2 = st.columns(2)
+        if dd1.button("Dry run", key="diag_dedup_dry"):
+            r = runner.dedup_tracker(dry_run=True)
+            st.code((r.stdout or r.stderr)[-2000:], language="text")
+        if dd2.button("Apply", key="diag_dedup_apply", type="primary"):
+            r = runner.dedup_tracker(dry_run=False)
+            st.code((r.stdout or r.stderr)[-2000:], language="text")
+            st.cache_data.clear()
+
+    with tabs[3]:
+        st.write("Check if a new career-ops version is available on GitHub.")
+        uc1, uc2 = st.columns(2)
+        if uc1.button("Check for updates", key="diag_update_check"):
+            r = runner.update_check()
+            data = r.json() or {}
+            if data.get("status") == "update-available":
+                st.warning(f"Update available: **{data.get('local')} → {data.get('remote')}**")
+                st.markdown(data.get("changelog") or "_(no changelog excerpt)_")
+            elif data.get("status") == "up-to-date":
+                st.success("Already on the latest version.")
+            else:
+                st.info(f"Status: {data.get('status', 'unknown')}")
+            st.code(r.stdout[-1500:], language="text")
+        if uc2.button("Apply update", key="diag_update_apply", type="primary"):
+            r = runner.update_apply()
+            st.code((r.stdout or r.stderr)[-2000:], language="text")
+            if r.ok:
+                st.success("Update applied. Restart the dashboard to pick up changes.")
+
+    with tabs[4]:
+        st.write("Run pipeline-integrity checks: orphan rows, malformed entries, missing reports.")
+        v1, v2 = st.columns(2)
+        if v1.button("Verify pipeline", key="diag_verify", type="primary"):
+            r = runner.verify_pipeline()
+            st.code((r.stdout or r.stderr)[-2500:], language="text")
+        if v2.button("Doctor", key="diag_doctor"):
+            r = runner.doctor()
+            st.code((r.stdout or r.stderr)[-2500:], language="text")
+
+
+@st.dialog("Paste a JD URL")
+def paste_dialog():
+    st.caption(
+        "Adds the URL to `data/pipeline.md` (the second-brain inbox). "
+        "Run **Inbox → Promote** to bring it into the tracker, or use Claude Code's "
+        "`/career-ops {url}` for the full auto-pipeline."
+    )
+    url = st.text_input("Job posting URL", placeholder="https://boards.greenhouse.io/...",
+                         key="paste_url")
+    c_col, r_col = st.columns(2)
+    company_in = c_col.text_input("Company (optional)", key="paste_company")
+    role_in = r_col.text_input("Role (optional)", key="paste_role")
+
+    a, b = st.columns(2)
+    if a.button("Cancel", use_container_width=True, key="paste_cancel"):
+        st.session_state["show_paste_dialog"] = False
+        st.rerun()
+    if b.button("Add to inbox", type="primary", use_container_width=True, key="paste_save"):
+        try:
+            p = tracker.append_to_pipeline(url, company_in, role_in)
+            st.toast(f"Added to {p.relative_to(project_root())}", icon="📥")
+            st.session_state["show_paste_dialog"] = False
+            st.cache_data.clear()
+            st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+        except Exception as e:
+            st.error(f"Failed to write pipeline.md: {e}")
+
+
+@st.dialog("Pipeline inbox", width="large")
+def inbox_dialog():
+    """Show contents of data/pipeline.md — pending and processed sections."""
+    data = tracker.read_pipeline_inbox()
+    pending = data["pending"]
+    processed = data["processed"]
+
+    st.caption(
+        f"`data/pipeline.md` · **{len(pending)}** pending · "
+        f"**{len(processed)}** processed. "
+        f"To turn pending URLs into evaluations, paste a URL into Claude Code via "
+        f"`/career-ops {{url}}` (full auto-pipeline) or `/career-ops pipeline` (batch the lot)."
+    )
+
+    if pending:
+        st.markdown("##### Pending")
+        for entry in pending:
+            with st.container(border=True):
+                pc1, pc2 = st.columns([5, 1])
+                with pc1:
+                    label = f"[{entry['url']}]({entry['url']})"
+                    meta = " · ".join(filter(None, [entry["company"], entry["role"]]))
+                    st.markdown(f"{label}" + (f"  \n*{meta}*" if meta else ""))
+                with pc2:
+                    if st.button("Mark done", key=f"inbox_done_{entry['url']}",
+                                  use_container_width=True):
+                        if tracker.mark_pipeline_processed(entry["url"]):
+                            st.toast("Moved to Processed", icon="✓")
+                            st.rerun()
+    else:
+        st.caption("No pending URLs in the inbox.")
+
+    if processed:
+        with st.expander(f"Processed ({len(processed)})", expanded=False):
+            for entry in processed:
+                meta = " · ".join(filter(None, [entry["company"], entry["role"]]))
+                st.markdown(f"- ✓ [{entry['url']}]({entry['url']})" + (f" — *{meta}*" if meta else ""))
+
+
+# Streamlit only allows ONE dialog open per script run. Use elif so a stuck
+# flag from a previous interaction doesn't crash the page when the user opens
+# a different dialog. Always render the dialog matching the FIRST active flag.
+_DIALOG_KEYS = (
+    "show_paste_dialog", "show_scan_dialog", "show_inbox_dialog",
+    "show_eval_dialog", "show_diag_dialog", "show_compare_dialog",
+)
+_active = next((k for k in _DIALOG_KEYS if st.session_state.get(k)), None)
+# Clear any stale flags so they can't piggyback the next rerun.
+for _k in _DIALOG_KEYS:
+    if _k != _active:
+        st.session_state[_k] = False
+
+if _active == "show_paste_dialog":
+    paste_dialog()
+elif _active == "show_scan_dialog":
     scan_dialog()
+elif _active == "show_inbox_dialog":
+    inbox_dialog()
+elif _active == "show_eval_dialog" and not df.empty:
+    evaluate_dialog(pending_with_url)
+elif _active == "show_diag_dialog":
+    diagnostics_dialog()
 
 
-# ── Batch progress (tqdm-style, auto-refreshes while active) ─────────
+# ── Auto-merge + Batch progress overlay ────────────────────────────────
 
-# Auto-merge any completed evaluations into applications.md so the worklist
-# reflects fresh scores/reports without manual `node merge-tracker.mjs`.
 _merged_count = batch.auto_merge_if_pending()
 if _merged_count > 0:
-    st.cache_data.clear()  # force tracker to re-read applications.md
-    # Reload df NOW so the worklist below picks up the freshly-merged rows
-    # without waiting for the next autorefresh tick (cuts streaming latency
-    # from ~4s to ~2s while a batch is running).
+    st.cache_data.clear()
     df = tracker.load_applications()
 
 state_df = batch.read_state()
-if not state_df.empty:
-    summary = batch.state_summary()
+summary = batch.state_summary() if not state_df.empty else {"active": False, "total": 0,
+                                                              "completed": 0, "failed": 0,
+                                                              "in_progress": 0, "pending": 0}
 
-    # Autorefresh every 2s WHILE batch is active (so progress is live, tqdm-style).
-    # Stops on its own once no rows are in_progress/pending.
+if not state_df.empty:
     if summary["active"] and st_autorefresh is not None:
-        st_autorefresh(interval=2000, limit=600, key="batch_autorefresh")
+        st_autorefresh(interval=2000, limit=900, key="batch_autorefresh")
 
     total = summary["total"] or 1
     done = summary["completed"] + summary["failed"]
     pct = done / total if total else 0
-    bar_width = 40
+    bar_width = 36
     filled = int(pct * bar_width)
     bar = "█" * filled + "░" * (bar_width - filled)
-
     status_word = "Running…" if summary["active"] else "Done"
-    color = "var(--accent)" if summary["active"] else "#4ADE80"
+    color = "var(--accent)" if summary["active"] else "var(--success)"
 
     st.markdown(
         f'''
-        <div style="background:var(--bg-card);border:1px solid var(--bd);border-radius:12px;padding:18px 22px;margin-bottom:16px;">
+        <div style="background:var(--bg-card);border:1px solid var(--bd);border-radius:12px;padding:16px 20px;margin-bottom:14px;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
                 <div>
                     <div style="font-size:11px;text-transform:uppercase;letter-spacing:0.08em;color:var(--tx3);">Batch evaluation</div>
-                    <div style="color:var(--tx);font-weight:600;font-size:1.1rem;margin-top:2px;">
+                    <div style="color:var(--tx);font-weight:600;font-size:1.05rem;margin-top:2px;">
                         {done}/{summary["total"]} — {int(pct*100)}% · <span style="color:{color};">{status_word}</span>
                     </div>
                 </div>
                 <div style="display:flex;gap:18px;text-align:right;">
-                    <div><div style="font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;">In flight</div><div style="color:var(--tx);font-weight:600;font-size:1.1rem;">{summary["in_progress"]}</div></div>
-                    <div><div style="font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;">Failed</div><div style="color:{"var(--status-rejected)" if summary["failed"] else "var(--tx)"};font-weight:600;font-size:1.1rem;">{summary["failed"]}</div></div>
+                    <div><div style="font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;">In flight</div><div style="color:var(--tx);font-weight:600;font-size:1.05rem;">{summary["in_progress"]}</div></div>
+                    <div><div style="font-size:11px;color:var(--tx3);text-transform:uppercase;letter-spacing:0.06em;">Failed</div><div style="color:{"var(--danger)" if summary["failed"] else "var(--tx)"};font-weight:600;font-size:1.05rem;">{summary["failed"]}</div></div>
                 </div>
             </div>
             <div style="font-family:'JetBrains Mono',monospace;font-size:14px;letter-spacing:0;color:{color};line-height:1.2;">{bar}</div>
@@ -374,35 +672,14 @@ if not state_df.empty:
         unsafe_allow_html=True,
     )
 
-    # Currently-processing ticker
-    processing = batch.currently_processing()
-    if processing:
-        st.markdown('<div class="section-label">Now evaluating</div>', unsafe_allow_html=True)
-        for r in processing[:3]:
-            rid = r.get("id", "?")
-            ru = (r.get("url", "") or "")[:90]
-            st.markdown(
-                f'<div style="background:var(--bg-elev);border-left:3px solid var(--accent);border-radius:6px;'
-                f'padding:8px 12px;margin-bottom:6px;color:var(--tx2);font-size:0.85rem;">'
-                f'<span style="color:var(--tx);font-weight:600;">#{rid}</span> · {ru}</div>',
-                unsafe_allow_html=True,
-            )
-
-    # Live log tail
-    log_name, log_tail = batch.latest_log_tail(n_lines=12)
+    log_name, log_tail = batch.latest_log_tail(n_lines=10)
     if log_tail:
-        with st.expander(f"📜 Live log — {log_name}", expanded=summary["active"]):
+        with st.expander(f"Live log — {log_name}", expanded=False):
             st.code(log_tail, language="text")
 
-    # Per-row detail
-    with st.expander("Per-row batch worker status (id, started, finished, score, error)", expanded=False):
-        st.caption("Each row is one `claude -p` worker. Updated as workers finish — newest at top.")
-        display_state = state_df[["id", "status", "started_at", "completed_at", "report_num", "score", "error"]].copy()
-        st.dataframe(display_state.tail(50)[::-1], use_container_width=True, hide_index=True)
-
-    # Reset button (visible once batch is no longer active)
     if not summary["active"]:
-        if st.button("Clear batch state", key="clear_batch_state", help="Removes batch-input.tsv and batch-state.tsv so this strip disappears."):
+        if st.button("Clear batch state", key="clear_batch_state",
+                     help="Removes batch-input.tsv and batch-state.tsv so this strip disappears."):
             (project_root() / "batch" / "batch-state.tsv").unlink(missing_ok=True)
             (project_root() / "batch" / "batch-input.tsv").unlink(missing_ok=True)
             st.toast("Batch state cleared.", icon="🧹")
@@ -412,21 +689,41 @@ if not state_df.empty:
 # ── Worklist ───────────────────────────────────────────────────────────
 
 if df.empty:
+    st.info("No applications yet. Run a scan, or paste a JD URL into pipeline.md.")
     st.stop()
 
-wc1, wc2, wc3, wc4 = st.columns([2.4, 1.4, 1.2, 1.0])
-wc1.markdown("##### Worklist")
-sort_choice = wc2.selectbox(
-    "Sort ↑↓",
-    ["Smart (default)", "Score (high→low)", "Score (low→high)", "Date (newest)", "Status (legacy)"],
-    label_visibility="visible",
-    key="worklist_sort",
-    help="Smart: Evaluated high-score first, watchlist & inactive sink to the bottom.",
-)
-hide_no = wc3.toggle("Hide 'No' interest", value=True, help="Hide rows you've marked as not interested.")
-show_inactive = wc4.toggle("Show inactive", value=False, help="Include Discarded / SKIP / Rejected / expired postings.")
+# Build per-row progress overlay from batch-state.tsv
+_inprog_ids: set[int] = set()
+_failed_ids: set[int] = set()
+_completed_ids: set[int] = set()
+if not state_df.empty and "id" in state_df.columns:
+    for _, br in state_df.iterrows():
+        try:
+            rid = int(br["id"])
+        except (TypeError, ValueError):
+            continue
+        bs = str(br.get("status", "")).lower()
+        if bs in ("processing", "in_progress"):
+            _inprog_ids.add(rid)
+        elif bs == "failed":
+            _failed_ids.add(rid)
+        elif bs == "completed":
+            _completed_ids.add(rid)
 
-# Annotate with interest (from data/interest.tsv, keyed by row num)
+# ── Filter strip ───────────────────────────────────────────────────────
+
+f1, f2, f3, f4 = st.columns([2.2, 1.4, 1.2, 1.0])
+f1.markdown("##### Worklist")
+sort_choice = f2.selectbox(
+    "Sort",
+    ["Smart", "Score ↓", "Score ↑", "Date (newest)", "Status"],
+    label_visibility="collapsed",
+    key="worklist_sort",
+)
+hide_no = f3.toggle("Hide 'No'", value=True, help="Hide rows you've marked Interest = No.")
+show_inactive = f4.toggle("Show inactive", value=False,
+                          help="Include Discarded / SKIP / Rejected / expired postings.")
+
 _interest_map = interest.load_interest()
 
 status_order = {
@@ -443,70 +740,40 @@ worklist = df if show_inactive else df[~df["__expired"]]
 if hide_no:
     worklist = worklist[worklist["__interest"] != "No"]
 
-# ── Column filters (Status / Company / Score / Date) ─────────────────
-# Canonical states from templates/states.yml + "Pending"/"Watchlist" seen
-# in status_order, plus "In progress" (live batch overlay).
-_status_options = [
-    "Pending", "Watchlist", "Evaluated", "In progress", "Applied",
-    "Responded", "Interview", "Offer", "Rejected", "Discarded", "SKIP",
-]
-
-# Bounds for the date picker — fall back to today if column has no values.
+# Column filters
+_status_options = ["Pending", "Watchlist", "Evaluated", "In progress", "Applied",
+                    "Responded", "Interview", "Offer", "Rejected", "Discarded", "SKIP"]
 _dates = pd.to_datetime(worklist["date"], errors="coerce").dropna()
-if not _dates.empty:
-    _date_min = _dates.min().date()
-    _date_max = _dates.max().date()
-else:
-    _date_max = dt.date.today()
-    _date_min = _date_max
+_date_max = _dates.max().date() if not _dates.empty else dt.date.today()
+_date_min = _dates.min().date() if not _dates.empty else _date_max
 
 fc1, fc2, fc3, fc4 = st.columns([1.4, 1.4, 1.6, 1.6])
-filter_status = fc1.multiselect(
-    "Status", options=_status_options, default=st.session_state.get("filter_status", []),
-    key="filter_status", placeholder="Any status",
-)
+filter_status = fc1.multiselect("Status", options=_status_options,
+                                 default=st.session_state.get("filter_status", []),
+                                 key="filter_status", placeholder="Any status")
 _company_options = sorted(
     {str(c) for c in worklist["company"].dropna().astype(str) if str(c).strip()}
 )
-filter_company = fc2.multiselect(
-    "Company", options=_company_options,
-    default=st.session_state.get("filter_company", []),
-    key="filter_company", placeholder="Any company",
-)
-filter_score = fc3.slider(
-    "Score range", 0.0, 5.0,
-    value=st.session_state.get("filter_score", (0.0, 5.0)),
-    step=0.1, key="filter_score",
-)
-filter_score_unscored = fc3.checkbox(
-    "Include unscored", value=st.session_state.get("filter_score_unscored", True),
-    key="filter_score_unscored",
-)
-filter_date = fc4.date_input(
-    "Date range", value=st.session_state.get("filter_date", (_date_min, _date_max)),
-    min_value=_date_min, max_value=_date_max, key="filter_date",
-)
+filter_company = fc2.multiselect("Company", options=_company_options,
+                                  default=st.session_state.get("filter_company", []),
+                                  key="filter_company", placeholder="Any company")
+filter_score = fc3.slider("Score range", 0.0, 5.0,
+                          value=st.session_state.get("filter_score", (0.0, 5.0)),
+                          step=0.1, key="filter_score")
+filter_score_unscored = fc3.checkbox("Include unscored",
+                                      value=st.session_state.get("filter_score_unscored", True),
+                                      key="filter_score_unscored")
+filter_date = fc4.date_input("Date range",
+                              value=st.session_state.get("filter_date", (_date_min, _date_max)),
+                              min_value=_date_min, max_value=_date_max, key="filter_date")
 
-# Apply filters (skip each one when at "no filter" default).
 if filter_status:
-    # Match on the post-overlay status, but here we only have raw status —
-    # the live "In progress" overlay is applied later, so honor that label
-    # by including rows whose num appears in the live in-progress map.
     _statuses_set = set(filter_status)
     _wanted_in_progress = "In progress" in _statuses_set
     _other_statuses = _statuses_set - {"In progress"}
-    if _wanted_in_progress and not state_df.empty and "id" in state_df.columns and "status" in state_df.columns:
-        _in_progress_ids = {
-            int(br["id"])
-            for _, br in state_df.iterrows()
-            if str(br.get("status", "")).lower() in ("processing", "in_progress")
-            and pd.notna(br.get("id"))
-        }
-    else:
-        _in_progress_ids = set()
     mask = worklist["status"].isin(_other_statuses)
-    if _in_progress_ids:
-        mask = mask | worklist["num"].isin(_in_progress_ids)
+    if _wanted_in_progress and _inprog_ids:
+        mask = mask | worklist["num"].isin(_inprog_ids)
     worklist = worklist[mask]
 
 if filter_company:
@@ -520,24 +787,22 @@ if not (_lo == 0.0 and _hi == 5.0 and filter_score_unscored):
         score_mask = score_mask | _score_num.isna()
     worklist = worklist[score_mask]
 
-# date_input returns a tuple when range is selected; a single date if user picked one day.
 if isinstance(filter_date, tuple) and len(filter_date) == 2:
     _df_lo, _df_hi = filter_date
     if not (_df_lo == _date_min and _df_hi == _date_max):
         _wd = pd.to_datetime(worklist["date"], errors="coerce")
         worklist = worklist[(_wd.dt.date >= _df_lo) & (_wd.dt.date <= _df_hi)]
 
-if sort_choice == "Score (high→low)":
+# Sort
+if sort_choice == "Score ↓":
     worklist = worklist.sort_values(["score", "date"], ascending=[False, False], na_position="last")
-elif sort_choice == "Score (low→high)":
+elif sort_choice == "Score ↑":
     worklist = worklist.sort_values(["score", "date"], ascending=[True, False], na_position="last")
 elif sort_choice == "Date (newest)":
     worklist = worklist.sort_values("date", ascending=False, na_position="last")
-elif sort_choice == "Status (legacy)":
+elif sort_choice == "Status":
     worklist = worklist.sort_values(["__sort", "date"], ascending=[True, False])
 else:
-    # Smart sort: Evaluated (score desc) → active pipeline (score desc) →
-    # Watchlist (date desc) → everything else (status order, date desc).
     def _smart_group(s: str) -> int:
         if s == "Evaluated": return 0
         if s in ("Applied", "Responded", "Interview", "Offer"): return 1
@@ -545,22 +810,23 @@ else:
         return 3
     worklist = worklist.copy()
     worklist["__group"] = worklist["status"].map(_smart_group).fillna(3).astype(int)
+    # In-progress rows should bubble to the top so progress is visible.
+    worklist["__active"] = worklist["num"].isin(_inprog_ids)
     worklist = worklist.sort_values(
-        ["__group", "score", "__sort", "date"],
-        ascending=[True, False, True, False],
+        ["__active", "__group", "score", "__sort", "date"],
+        ascending=[False, True, False, True, False],
         na_position="last",
     )
-    worklist = worklist.drop(columns=["__group"])
+    worklist = worklist.drop(columns=["__group", "__active"])
 
 worklist = worklist.drop(columns=["__sort", "__expired"])
 
-worklist_view = worklist[["num", "company", "role", "score", "status", "has_pdf", "job_url", "date", "report_path", "__interest"]].copy()
+worklist_view = worklist[["num", "company", "role", "score", "status", "has_pdf",
+                          "job_url", "date", "report_path", "__interest"]].copy()
 worklist_view["added_date"] = worklist_view["date"].dt.strftime("%Y-%m-%d")
 worklist_view["job_url"] = worklist_view["job_url"].fillna("").replace("", None)
 
-# Parse posted_date + salary_raw from each row's report (when one exists).
-# Cheap on-disk read per row; reports are short and st.cache_data on the page
-# keeps repeat renders fast within the same session.
+# Resolve posted_date + salary from each row's report
 _posted_map: dict[int, str] = {}
 _salary_map: dict[int, str] = {}
 for _, _r in worklist_view.iterrows():
@@ -582,7 +848,7 @@ for _, _r in worklist_view.iterrows():
     if rs.salary_raw:
         _salary_map[n_] = rs.salary_raw
 
-# Date column = JD posted date when known; tracker date with "(added)" otherwise.
+
 def _date_cell(row) -> str:
     try:
         n_ = int(row["num"])
@@ -593,163 +859,141 @@ def _date_cell(row) -> str:
         return p
     added = row.get("added_date") or ""
     return f"{added} (added)" if added else ""
+
+
 worklist_view["date"] = worklist_view.apply(_date_cell, axis=1)
 worklist_view["salary"] = worklist_view["num"].map(_salary_map).fillna("")
 worklist_view = worklist_view.drop(columns=["report_path", "added_date"])
 worklist_view = worklist_view.rename(columns={"__interest": "Interest"})
 
-# Overlay live batch state on the Status column: rows currently being
-# evaluated show "In progress"; rows that just completed show "Evaluated".
-# "completed" only overlays when the row actually has a merged score —
-# otherwise merge-tracker.mjs may have routed the report to a different
-# tracker row (e.g. company/role rename), and the original row should
-# keep its real applications.md status (typically "Pending").
-_batch_state_map: dict[int, str] = {}
-if not state_df.empty and "id" in state_df.columns and "status" in state_df.columns:
-    for _, br in state_df.iterrows():
-        try:
-            _id = int(br["id"])
-        except (TypeError, ValueError):
-            continue
-        bs = str(br.get("status", "")).lower()
-        if bs in ("processing", "in_progress"):
-            _batch_state_map[_id] = "In progress"
-        elif bs == "failed":
-            _batch_state_map[_id] = "Failed"
-        elif bs == "completed":
-            _batch_state_map[_id] = "Evaluated"  # gated below by score presence
 
-if _batch_state_map:
-    def _overlay(r):
-        target = _batch_state_map.get(int(r["num"]))
-        if target is None:
-            return r["status"]
-        # For "completed" entries, only overlay when the row has a real
-        # score in applications.md. Otherwise the merge didn't land here
-        # and overlaying "Evaluated" would mislead the user.
-        if target == "Evaluated":
-            sc = r.get("score")
-            if sc is None or (isinstance(sc, float) and pd.isna(sc)):
-                return r["status"]
-        return target
-    worklist_view["status"] = worklist_view.apply(_overlay, axis=1)
+# Build the "Progress" cell — an inline indicator for rows actively in the batch.
+def _progress_cell(num: int, status: str) -> str:
+    if num in _inprog_ids:
+        return "● running"
+    if num in _failed_ids and status == "Pending":
+        return "✗ failed"
+    return ""
+
+
+worklist_view["Progress"] = worklist_view.apply(
+    lambda r: _progress_cell(int(r["num"]), str(r["status"])),
+    axis=1,
+)
+
+
+# Overlay batch state on status column
+def _overlay_status(r) -> str:
+    n_ = int(r["num"])
+    if n_ in _inprog_ids:
+        return "In progress"
+    if n_ in _failed_ids and r["status"] == "Pending":
+        return "Failed"
+    if n_ in _completed_ids and r["status"] == "Pending":
+        # Only show "Evaluated" if a score actually landed
+        sc = r.get("score")
+        if sc is not None and not (isinstance(sc, float) and pd.isna(sc)):
+            return "Evaluated"
+    return r["status"]
+
+
+worklist_view["status"] = worklist_view.apply(_overlay_status, axis=1)
+
+# Per-row Open link: hits the role page directly with ?num=N.
+# Streamlit routes pages registered in st.navigation() at /{page_basename},
+# so /role?num=42 loads role.py and the existing query-param handler picks
+# up the selection.
+worklist_view["open"] = worklist_view["num"].apply(lambda n: f"/role?num={int(n)}")
 
 worklist_view = worklist_view.rename(columns={
     "num": "#", "company": "Company", "role": "Role", "score": "Score",
     "status": "Status", "has_pdf": "PDF", "job_url": "JD link", "date": "Date",
-    "salary": "Salary",
+    "salary": "Salary", "open": "Review",
 })
 
-# Add a Select column for the action bar; track Interest separately (inline-editable).
-worklist_view.insert(0, "Select", False)
-worklist_view = worklist_view[["Select", "#", "Company", "Role", "Score", "Salary", "Status", "PDF", "JD link", "Date", "Interest"]]
+worklist_view = worklist_view[[
+    "#", "Review", "Company", "Role", "Progress", "Score", "Salary",
+    "Status", "PDF", "JD link", "Date", "Interest",
+]]
 
-# data_editor: Select + Interest are inline-editable; everything else read-only.
-edited_view = st.data_editor(
+# ── Single-click row navigation (smooth Review/Open) ──────────────────
+# Streamlit's data_editor supports selection events. We use it so a single
+# click anywhere in the row opens role.py — no more two-step "tick then click".
+
+event = st.dataframe(
     worklist_view,
     use_container_width=True,
     hide_index=True,
-    height=440,
+    height=460,
     key="worklist_table",
-    disabled=["#", "Company", "Role", "Score", "Salary", "Status", "PDF", "JD link", "Date"],
+    on_select="rerun",
+    selection_mode="multi-row",
     column_config={
-        "Select": st.column_config.CheckboxColumn("☐", help="Tick rows for the action bar below.", width="small", default=False),
-        "JD link": st.column_config.LinkColumn("JD link", display_text="open posting", width="small"),
-        "Score": st.column_config.NumberColumn("Score", format="%.1f / 5", help="—  = not evaluated yet"),
+        "Review": st.column_config.LinkColumn(
+            "Review", display_text="open →", width="small",
+            help="Click to drill into the role's full evaluation.",
+        ),
+        "JD link": st.column_config.LinkColumn("JD link", display_text="JD ↗", width="small"),
+        "Score": st.column_config.NumberColumn("Score", format="%.1f / 5",
+                                                help="— = not evaluated yet"),
         "Salary": st.column_config.TextColumn(
             "Salary", width="small",
-            help="Estimated comp band — from the evaluation report. Blank = not mentioned in JD.",
+            help="Estimated comp band from the evaluation report. Blank = not in JD.",
+        ),
+        "Progress": st.column_config.TextColumn(
+            "Progress", width="small",
+            help="Live status: '● running' = evaluation in flight, '✗ failed' = needs retry.",
         ),
         "Date": st.column_config.TextColumn(
             "Date", width="small",
-            help="JD posting date when known; falls back to the date the row was added.",
+            help="JD posting date when known; tracker add-date otherwise.",
         ),
         "PDF": st.column_config.CheckboxColumn("PDF", width="small"),
-        "Interest": st.column_config.SelectboxColumn(
-            "Interest",
-            options=["", "Yes", "No"],
-            help="Mark whether you want to pursue this role. Saved per role (not per company).",
-            width="small",
-        ),
     },
 )
 
-# Persist any Interest changes back to data/interest.tsv
-if edited_view is not None and not edited_view.empty:
-    for _, r in edited_view.iterrows():
+picked_nums: list[int] = []
+if event and getattr(event, "selection", None):
+    rows = event.selection.get("rows") or []
+    for ri in rows:
         try:
-            n = int(r["#"])
-        except (TypeError, ValueError):
-            continue
-        new_val = "" if r["Interest"] is None else str(r["Interest"]).strip()
-        if new_val not in ("", "Yes", "No"):
-            continue
-        if _interest_map.get(n, "") != new_val:
-            try:
-                interest.set_interest(n, new_val)
-            except Exception:
-                pass
+            picked_nums.append(int(worklist_view.iloc[ri]["#"]))
+        except (IndexError, KeyError, ValueError):
+            pass
 
-# Derive selection from the Select column.
-picked_nums_direct: list[int] = []
-if edited_view is not None and "Select" in edited_view.columns:
-    for _, r in edited_view.iterrows():
-        if bool(r.get("Select")):
-            try:
-                picked_nums_direct.append(int(r["#"]))
-            except (TypeError, ValueError):
-                pass
-st.caption("Tick **Select** to add a row to the action bar · set **Interest = Yes/No** to filter your worklist · sort with the dropdown above")
+st.caption(
+    "Click **open →** in any row to drill in. Tick the row checkboxes to compare or batch-evaluate."
+)
 
-# ── Contextual action bar (visible only when 1+ rows are checked) ──────
-picked_nums = picked_nums_direct
+# ── Bulk action bar (only when 2+ rows selected) ──────────────────────
+
 if picked_nums:
-    # Map back to the full worklist DataFrame so we get job_url + raw fields for evaluate_dialog.
     picked_full = worklist[worklist["num"].isin(picked_nums)].copy()
     all_have_url = bool(len(picked_full)) and picked_full["job_url"].fillna("").astype(str).str.strip().ne("").all()
 
     st.markdown(
-        f'<div style="color:var(--tx2);font-size:0.85rem;margin:8px 0 6px;">'
-        f'<strong>{len(picked_nums)}</strong> selected'
+        f'<div style="color:var(--tx2);font-size:0.85rem;margin:10px 0 6px;">'
+        f'<strong>{len(picked_nums)}</strong> selected · '
+        f'<span style="color:var(--tx3);">#{", #".join(str(n) for n in picked_nums[:6])}'
+        f'{" …" if len(picked_nums) > 6 else ""}</span>'
         f'</div>',
         unsafe_allow_html=True,
     )
-    ab0, ab1, ab2, ab3, _ = st.columns([1.4, 1.6, 1.6, 1.0, 3.4])
+    ab1, ab2, ab3, _ = st.columns([1.7, 1.5, 1.5, 4.3])
 
-    # REVIEW — single-row drill-in (uses st.switch_page for same-tab navigation).
-    # Primary CTA when exactly one row is selected; still available with multi-select
-    # but reads "Review #{first}" and clarifies the behaviour via help text.
-    review_help = (
-        "Open this role's full evaluation report."
-        if len(picked_nums) == 1
-        else "Reviews the first-selected row."
-    )
-    review_label = f"Review #{picked_nums[0]}"
-    if ab0.button(
-        review_label,
-        type="primary",
-        use_container_width=True,
-        key="worklist_open_btn",
-        help=review_help,
-    ):
-        st.session_state.selected_num = picked_nums[0]
-        st.switch_page("pages/role.py")
-
-    if ab1.button(
-        f"Evaluate {len(picked_nums)} selected",
-        type="primary",
-        use_container_width=True,
-        disabled=not all_have_url,
-        help=None if all_have_url else "Every selected row needs a JD URL to evaluate.",
-        key="worklist_bulk_eval",
-    ):
+    if ab1.button(f"Evaluate {len(picked_nums)}", type="primary", use_container_width=True,
+                   disabled=not all_have_url,
+                   help=None if all_have_url else "Every selected row needs a JD URL.",
+                   key="action_eval"):
         evaluate_dialog(picked_full)
 
-    if ab2.button(
-        "Mark selected → Discarded",
-        use_container_width=True,
-        key="worklist_bulk_discard",
-    ):
+    if ab2.button("Compare", use_container_width=True, key="action_compare",
+                   disabled=len(picked_nums) < 2,
+                   help="Side-by-side TL;DRs of 2+ scored offers."):
+        st.session_state["compare_nums"] = picked_nums
+        st.session_state["show_compare_dialog"] = True
+
+    if ab3.button("→ Discarded", use_container_width=True, key="action_discard"):
         moved = 0
         for n in picked_nums:
             try:
@@ -762,17 +1006,50 @@ if picked_nums:
             st.cache_data.clear()
             st.rerun()
 
-    if ab3.button("Clear selection", use_container_width=True, key="worklist_bulk_clear"):
-        # Resetting the data_editor's key drops its edit state (including Select ticks).
-        st.session_state.pop("worklist_table", None)
-        st.rerun()
+
+# ── Compare dialog (ofertas mode) ─────────────────────────────────────
+
+@st.dialog("Compare offers", width="large")
+def compare_dialog(nums: list[int]):
+    rows = df[df["num"].isin(nums)].copy()
+    if rows.empty:
+        st.info("No rows.")
+        return
+    grid = rows[["num", "company", "role", "score", "status", "job_url"]].copy()
+    grid["report"] = rows["report_path"]
+    grid["salary"] = grid["num"].map(_salary_map).fillna("")
+    grid["posted"] = grid["num"].map(_posted_map).fillna("")
+    st.dataframe(
+        grid.rename(columns={
+            "num": "#", "company": "Company", "role": "Role", "score": "Score",
+            "status": "Status", "job_url": "URL", "report": "Report", "salary": "Salary",
+            "posted": "Posted",
+        }),
+        hide_index=True, use_container_width=True,
+        column_config={"URL": st.column_config.LinkColumn("URL", display_text="open")},
+    )
+    st.divider()
+    st.caption("TL;DR from each evaluation report (Block A):")
+    for _, r in rows.iterrows():
+        rp = safe_str(r.get("report_path"))
+        if not rp:
+            continue
+        rs = reports.parse_report(rp)
+        if rs is None:
+            continue
+        with st.container(border=True):
+            st.markdown(f"**#{int(r['num'])} · {r['company']} — {r['role']}**")
+            tldr = (rs.tldr or "_(no TL;DR)_").strip()
+            st.markdown(tldr)
 
 
-# ── Below the fold ─────────────────────────────────────────────────────
+if _active == "show_compare_dialog":
+    nums = st.session_state.get("compare_nums") or []
+    compare_dialog(nums)
 
-# Industry classifier — first match wins. "Other / Unsure" is the fallback;
-# we keep it in the chart as a smaller bucket so the user sees uncategorised
-# volume rather than silently hiding it.
+
+# ── Below-the-fold ─────────────────────────────────────────────────────
+
 _INDUSTRY_RULES = [
     ("Insurance / Reinsurance", re.compile(r"\b(insurance|reinsur|insurtech|insuretech|underwriting|claims|actuari)", re.IGNORECASE)),
     ("Banking",                  re.compile(r"\b(bank(?:ing)?|wealth|private bank|capital markets)\b", re.IGNORECASE)),
@@ -823,7 +1100,7 @@ with b2:
 with b3:
     with st.container(border=True):
         st.markdown("**Industry mix**")
-        st.caption("Pie equivalent — bars sized by count.")
+        st.caption("Bars sized by application count.")
         ind_series = worklist.apply(_classify_industry, axis=1) if not worklist.empty else pd.Series(dtype=str)
         if ind_series.empty:
             st.caption("No rows to classify.")

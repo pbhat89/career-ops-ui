@@ -33,31 +33,33 @@ def has_value(value: Any) -> bool:
 def score_tier(score: float | None) -> str:
     """Return a CSS color for a score on a 5-point scale."""
     if score is None or (isinstance(score, float) and math.isnan(score)):
-        return "#6b7280"  # gray
+        return "#8C9196"  # neutral
     if score >= 4.5:
-        return "#10b981"  # emerald
+        return "#44D49A"  # accent green
     if score >= 4.0:
-        return "#22d3ee"  # cyan
+        return "#6EE7B7"  # soft green
     if score >= 3.5:
-        return "#f59e0b"  # amber
+        return "#FDBA74"  # amber
     if score >= 3.0:
-        return "#fb923c"  # orange
-    return "#ef4444"  # red
+        return "#FB923C"  # orange
+    return "#FDA4AF"      # red
 
 
 # ── Status color tier ─────────────────────────────────────────────────
 
 _STATUS_COLORS = {
-    "Pending": ("#94a3b8", "rgba(148,163,184,0.12)"),
-    "Watchlist": ("#a78bfa", "rgba(167,139,250,0.12)"),
-    "Evaluated": ("#5E6AD2", "rgba(94,106,210,0.15)"),
-    "Applied": ("#22d3ee", "rgba(34,211,238,0.12)"),
-    "Responded": ("#60a5fa", "rgba(96,165,250,0.12)"),
-    "Interview": ("#34d399", "rgba(52,211,153,0.12)"),
-    "Offer": ("#10b981", "rgba(16,185,129,0.18)"),
-    "Rejected": ("#f87171", "rgba(248,113,113,0.12)"),
-    "Discarded": ("#6b7280", "rgba(107,114,128,0.10)"),
-    "SKIP": ("#6b7280", "rgba(107,114,128,0.10)"),
+    "Pending":     ("#8C9196", "rgba(140,145,150,0.10)"),
+    "Watchlist":   ("#C4B5FD", "rgba(196,181,253,0.12)"),
+    "Evaluated":   ("#3DB985", "rgba(61,185,133,0.14)"),
+    "In progress": ("#FBBF24", "rgba(251,191,36,0.12)"),
+    "Applied":     ("#5385C6", "rgba(83,133,198,0.14)"),
+    "Responded":   ("#FDBA74", "rgba(253,186,116,0.12)"),
+    "Interview":   ("#6EE7B7", "rgba(110,231,183,0.14)"),
+    "Offer":       ("#3DB985", "rgba(61,185,133,0.18)"),
+    "Rejected":    ("#FDA4AF", "rgba(253,164,175,0.12)"),
+    "Discarded":   ("#62666D", "rgba(98,102,109,0.10)"),
+    "SKIP":        ("#62666D", "rgba(98,102,109,0.10)"),
+    "Failed":      ("#FDA4AF", "rgba(253,164,175,0.12)"),
 }
 
 

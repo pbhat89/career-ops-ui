@@ -249,3 +249,126 @@ def status_counts(df: pd.DataFrame) -> dict[str, int]:
     if df.empty:
         return {}
     return df["status"].value_counts().to_dict()
+
+
+# ── Pipeline.md helpers (the /career-ops pipeline "inbox") ────────────
+
+
+def pipeline_path() -> Path:
+    return project_root() / "data" / "pipeline.md"
+
+
+def append_to_pipeline(url: str, company: str = "", role: str = "") -> Path:
+    """Append `- [ ] URL | Company | Role` to the `## Pending` section of
+    data/pipeline.md. Creates the file with a stub if it doesn't exist.
+    Idempotent against the URL — won't add a duplicate row.
+    """
+    p = pipeline_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    url = url.strip()
+    if not url.startswith("http"):
+        raise ValueError(f"Not a URL: {url!r}")
+
+    body = ""
+    if p.exists():
+        body = p.read_text(encoding="utf-8")
+        if url in body:
+            return p  # already present — skip silently
+
+    line_parts = [f"- [ ] {url}"]
+    if company.strip():
+        line_parts.append(company.strip())
+    if role.strip():
+        line_parts.append(role.strip())
+    new_line = " | ".join(line_parts)
+
+    if not body:
+        body = (
+            "# Pipeline — Inbox\n\n"
+            "## Pending\n"
+            f"{new_line}\n\n"
+            "## Processed\n"
+        )
+        p.write_text(body, encoding="utf-8")
+        return p
+
+    if "## Pending" in body:
+        # Insert immediately after the Pending header
+        body = re.sub(
+            r"(## Pending\s*\n)",
+            r"\1" + new_line + "\n",
+            body, count=1,
+        )
+    else:
+        body = body.rstrip() + f"\n\n## Pending\n{new_line}\n"
+    p.write_text(body, encoding="utf-8")
+    return p
+
+
+def read_pipeline_inbox() -> dict:
+    """Parse data/pipeline.md and return {pending: [...], processed: [...]}.
+    Each entry is a dict with keys: raw, url, company, role, status (' '|'!'|'x').
+    """
+    p = pipeline_path()
+    if not p.exists():
+        return {"pending": [], "processed": []}
+
+    pending: list[dict] = []
+    processed: list[dict] = []
+    section = None
+    for raw in p.read_text(encoding="utf-8", errors="ignore").splitlines():
+        s = raw.strip()
+        if s.startswith("## Pending"):
+            section = "pending"; continue
+        if s.startswith("## Processed"):
+            section = "processed"; continue
+        if not s.startswith("- ["):
+            continue
+        m = re.match(r"-\s*\[(.)\]\s*(.*)", s)
+        if not m:
+            continue
+        flag, rest = m.group(1), m.group(2).strip()
+        parts = [p.strip() for p in rest.split("|")]
+        url = next((p for p in parts if p.startswith("http")), "")
+        non_url = [p for p in parts if not p.startswith("http") and not p.startswith("#")]
+        entry = {
+            "raw": raw,
+            "url": url,
+            "company": non_url[0] if non_url else "",
+            "role":    non_url[1] if len(non_url) > 1 else "",
+            "status":  flag,
+        }
+        if section == "processed":
+            processed.append(entry)
+        else:
+            pending.append(entry)
+    return {"pending": pending, "processed": processed}
+
+
+def mark_pipeline_processed(url: str) -> bool:
+    """Find `- [ ] {url} ...` in pipeline.md, rewrite as `- [x] {url} ...`,
+    move to the Processed section. Returns True if a change was made."""
+    p = pipeline_path()
+    if not p.exists():
+        return False
+    body = p.read_text(encoding="utf-8")
+    pattern = re.compile(rf"^-\s*\[ \](\s+{re.escape(url)}.*)$", re.MULTILINE)
+    m = pattern.search(body)
+    if not m:
+        return False
+    old_line = m.group(0)
+    new_line = f"- [x]{m.group(1)}"
+    body = body.replace(old_line, "")
+    # Drop empty Pending lines that may result.
+    body = re.sub(r"\n{3,}", "\n\n", body)
+    # Append to Processed section
+    if "## Processed" in body:
+        body = re.sub(
+            r"(## Processed\s*\n)",
+            r"\1" + new_line + "\n",
+            body, count=1,
+        )
+    else:
+        body = body.rstrip() + f"\n\n## Processed\n{new_line}\n"
+    p.write_text(body, encoding="utf-8")
+    return True
