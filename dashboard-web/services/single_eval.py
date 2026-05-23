@@ -23,6 +23,7 @@ class SingleEvalRequest:
     url: str
     company: str
     role: str
+    template: str = ""  # CV template slug; empty = runner default (classic)
 
 
 def run_single(req: SingleEvalRequest) -> subprocess.Popen:
@@ -63,8 +64,11 @@ def run_single(req: SingleEvalRequest) -> subprocess.Popen:
     log_fh = log_path.open("w", encoding="utf-8")
 
     runner = project_root() / "batch" / "batch-runner.sh"
+    cmd = [bash_exe, str(runner), "--parallel", "1"]
+    if req.template:
+        cmd.extend(["--template", req.template])
     proc = subprocess.Popen(
-        [bash_exe, str(runner), "--parallel", "1"],
+        cmd,
         cwd=str(project_root()),
         stdin=subprocess.DEVNULL,  # avoid claude -p "no stdin data" warning
         stdout=log_fh,
