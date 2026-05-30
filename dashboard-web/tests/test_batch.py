@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv
+import subprocess
+import sys
 
 from services import batch, tracker
 
@@ -63,6 +65,40 @@ def test_read_state_parses_existing_file(temp_root):
     assert s["completed"] == 1
     assert s["failed"] == 1
     assert s["in_progress"] == 1
+
+
+def test_runner_alive_is_accurate_and_non_destructive(temp_root):
+    """runner_alive() must report liveness WITHOUT signalling the process.
+
+    Regression guard: on Windows os.kill(pid, 0) is not a no-op probe — it can
+    terminate the target. The live-progress autorefresh calls runner_alive()
+    every couple of seconds, so a destructive check would kill the very batch
+    runner it is polling. Must be a pure query on every platform."""
+    pid_file = temp_root / "batch" / "batch-runner.pid"
+    pid_file.parent.mkdir(parents=True, exist_ok=True)
+
+    proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        pid_file.write_text(str(proc.pid), encoding="utf-8")
+        # Reports alive...
+        assert batch.runner_alive() is True
+        # ...and the probe did NOT kill it (poll() stays None while running).
+        assert proc.poll() is None
+        # A second probe is still safe.
+        assert batch.runner_alive() is True
+        assert proc.poll() is None
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+
+    # Once the process is gone, liveness flips to False.
+    assert batch.runner_alive() is False
+
+    # Bogus / unparseable pid → not alive, never raises.
+    pid_file.write_text("99999999", encoding="utf-8")
+    assert batch.runner_alive() is False
+    pid_file.write_text("not-a-pid", encoding="utf-8")
+    assert batch.runner_alive() is False
 
 
 def test_bash_and_claude_availability_smoke(temp_root):

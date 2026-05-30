@@ -146,6 +146,48 @@ def start_batch(parallel: int = 1, dry_run: bool = False) -> subprocess.Popen:
     return proc
 
 
+def runner_alive() -> bool:
+    """Public alias — True if a batch-runner process is currently alive.
+
+    The UI uses this to keep the live-progress autorefresh running during the
+    launch handshake (the bash + claude CLI take a few seconds to write the
+    first 'processing' row, before which the state snapshot looks idle)."""
+    return _runner_alive()
+
+
+def _pid_alive(pid: int) -> bool:
+    """Non-destructive 'is this pid running?' check, cross-platform.
+
+    On POSIX, os.kill(pid, 0) is the canonical no-op liveness probe. On Windows
+    it is NOT — Python maps signal 0 to a console-control / TerminateProcess path
+    that can actually kill the target. So on Windows we query the process via the
+    Win32 API instead (OpenProcess + GetExitCodeProcess) and never signal it."""
+    if pid <= 0:
+        return False
+    import os
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False  # no such process (or no access — treat as gone)
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
 def _runner_alive() -> bool:
     """True if the pid in batch-runner.pid is a live process."""
     pid_file = project_root() / "batch" / "batch-runner.pid"
@@ -153,14 +195,7 @@ def _runner_alive() -> bool:
         return False
     try:
         pid = int(pid_file.read_text(encoding="utf-8").strip())
-        if pid <= 0:
-            return False
-        import os
-        try:
-            os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+        return _pid_alive(pid)
     except Exception:
         return False
 
