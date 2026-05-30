@@ -199,6 +199,97 @@ def test_websearch_scan_parses_offers(temp_root, monkeypatch):
     assert res["offers"][0]["source"] == "websearch"
 
 
+# ── Profile-derived default search queries ────────────────────────────
+
+def _write_profile(temp_root, body: str):
+    (temp_root / "config" / "profile.yml").write_text(body, encoding="utf-8")
+
+
+def test_profile_search_queries_from_target_roles(temp_root):
+    _write_profile(temp_root, """
+target_roles:
+  - title: Chief Data Officer
+  - title: Head of AI
+industries:
+  - Insurance
+  - Banking
+location:
+  city: Singapore
+  country: SG
+""")
+    qs = runner._profile_search_queries()
+    assert qs == [
+        '"Chief Data Officer" (Insurance OR Banking) Singapore',
+        '"Head of AI" (Insurance OR Banking) Singapore',
+    ]
+
+
+def test_profile_search_queries_flat_titles_and_country_fallback(temp_root):
+    _write_profile(temp_root, """
+target_titles:
+  - VP Analytics
+industries:
+  - Reinsurance
+location:
+  country: Singapore
+""")
+    qs = runner._profile_search_queries()
+    assert qs == ['"VP Analytics" (Reinsurance) Singapore']
+
+
+def test_profile_search_queries_titles_as_strings_no_industry_no_location(temp_root):
+    _write_profile(temp_root, """
+target_roles:
+  - Head of Risk
+""")
+    qs = runner._profile_search_queries()
+    assert qs == ['"Head of Risk"']
+
+
+def test_profile_search_queries_caps_at_max(temp_root):
+    titles = "\n".join(f"  - Role {i}" for i in range(20))
+    _write_profile(temp_root, "target_titles:\n" + titles)
+    qs = runner._profile_search_queries()
+    assert len(qs) == runner.WEBSEARCH_DEFAULT_MAX_QUERIES
+
+
+def test_profile_search_queries_missing_file_returns_empty(temp_root):
+    # temp_root has no config/profile.yml by default
+    assert not (temp_root / "config" / "profile.yml").exists()
+    assert runner._profile_search_queries() == []
+
+
+def test_profile_search_queries_no_titles_returns_empty(temp_root):
+    _write_profile(temp_root, "industries:\n  - Insurance\nlocation:\n  city: SG\n")
+    assert runner._profile_search_queries() == []
+
+
+def test_load_search_queries_falls_back_to_profile(temp_root):
+    """When portals.yml has no search_queries, default queries come from profile."""
+    # No portals.yml at all in temp_root → must fall back to profile.
+    assert not (temp_root / "portals.yml").exists()
+    _write_profile(temp_root, """
+target_titles:
+  - Head of Analytics
+industries:
+  - Insurance
+location:
+  city: Singapore
+""")
+    qs = runner._load_search_queries()
+    assert qs == ['"Head of Analytics" (Insurance) Singapore']
+
+
+def test_load_search_queries_prefers_portals_over_profile(temp_root):
+    """portals.yml search_queries win over the profile fallback."""
+    (temp_root / "portals.yml").write_text(
+        "search_queries:\n  - query: portal-query-one\n", encoding="utf-8"
+    )
+    _write_profile(temp_root, "target_titles:\n  - Head of AI\n")
+    qs = runner._load_search_queries()
+    assert qs == ["portal-query-one"]
+
+
 def test_websearch_scan_handles_claude_failure(temp_root, monkeypatch):
     import services.batch as _batch
     monkeypatch.setattr(_batch, "find_claude", lambda: "claude")

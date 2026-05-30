@@ -7,6 +7,18 @@
 # no dates, no extra text. Dates go in the date column.
 
 states:
+  - id: pending
+    label: Pending
+    aliases: [pendiente, new, scanned]
+    description: Scanned or added to the tracker, not yet evaluated
+    dashboard_group: pending
+
+  - id: watchlist
+    label: Watchlist
+    aliases: [watch, monitoring]
+    description: Of interest, parked for later (no application yet)
+    dashboard_group: watchlist
+
   - id: evaluated
     label: Evaluated
     aliases: [evaluada]

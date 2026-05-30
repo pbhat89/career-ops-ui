@@ -345,6 +345,20 @@ def _step_5_comp():
         key="regional_pref_multi",
     )
 
+    state.industries = st.multiselect(
+        "Target industries (folds into scanner search queries)",
+        options=ob.INDUSTRY_OPTIONS,
+        default=state.industries,
+        key="industries_multi",
+    )
+
+    state.preferences = st.text_area(
+        "Deal-breakers / preferences, e.g. no on-site, no startups under 20 people",
+        value=state.preferences,
+        height=90,
+        key="preferences_textarea",
+    )
+
     allow_next = state.salary_target_low > 0 or state.salary_minimum > 0
     if not allow_next:
         st.caption("Set at least one of: target-low or minimum.")

@@ -255,25 +255,94 @@ WEBSEARCH_SYSTEM = (
 )
 
 
-def _load_search_queries() -> list[str]:
-    """Enabled `search_queries[].query` strings from portals.yml (or [])."""
+def _profile_search_queries() -> list[str]:
+    """Derive default WebSearch queries from config/profile.yml.
+
+    Used as a fallback when portals.yml has no `search_queries`. Builds one
+    query per target title, scoped by the user's industries and location:
+
+        '"<title>" (<industry1> OR <industry2> …) <city or country>'
+
+    Reads these EXACT profile keys (all optional, missing → skipped):
+      - `target_roles`: list of {title: ...} dicts OR plain title strings
+      - `target_titles`: flat list of title strings (alternative to target_roles)
+      - `industries`: list of industry strings
+      - `location`: dict with `city` / `country`
+
+    Tolerates a missing file or any missing/malformed key — returns []."""
     if yaml is None:
         return []
-    path = project_root() / "portals.yml"
+    path = project_root() / "config" / "profile.yml"
     if not path.exists():
         return []
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except Exception:
         return []
+    if not isinstance(data, dict):
+        return []
+
+    # Titles: prefer target_roles (list of {title} dicts or strings), else target_titles.
+    titles: list[str] = []
+    for role in (data.get("target_roles") or []):
+        if isinstance(role, dict):
+            t = str(role.get("title") or "").strip()
+        else:
+            t = str(role or "").strip()
+        if t:
+            titles.append(t)
+    if not titles:
+        for t in (data.get("target_titles") or []):
+            t = str(t or "").strip()
+            if t:
+                titles.append(t)
+    if not titles:
+        return []
+
+    industries = [str(i).strip() for i in (data.get("industries") or []) if str(i).strip()]
+
+    loc = data.get("location") or {}
+    place = ""
+    if isinstance(loc, dict):
+        place = str(loc.get("city") or loc.get("country") or "").strip()
+
     out: list[str] = []
-    for q in (data.get("search_queries") or []):
-        if not isinstance(q, dict) or q.get("enabled") is False:
-            continue
-        query = str(q.get("query") or "").strip()
-        if query:
-            out.append(query)
+    for title in titles:
+        parts = [f'"{title}"']
+        if industries:
+            parts.append("(" + " OR ".join(industries) + ")")
+        if place:
+            parts.append(place)
+        out.append(" ".join(parts))
+        if len(out) >= WEBSEARCH_DEFAULT_MAX_QUERIES:
+            break
     return out
+
+
+def _load_search_queries() -> list[str]:
+    """Enabled `search_queries[].query` strings from portals.yml.
+
+    Falls back to profile-derived queries (`_profile_search_queries`) when
+    portals.yml has no usable `search_queries`."""
+    if yaml is None:
+        return []
+    path = project_root() / "portals.yml"
+    out: list[str] = []
+    if path.exists():
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            data = {}
+        for q in (data.get("search_queries") or []):
+            if not isinstance(q, dict) or q.get("enabled") is False:
+                continue
+            query = str(q.get("query") or "").strip()
+            if query:
+                out.append(query)
+    if out:
+        return out
+    # No portals.yml queries → fall back to the user's profile.
+    return _profile_search_queries()
 
 
 def build_websearch_prompt(queries: Sequence[str], company: Optional[str] = None,

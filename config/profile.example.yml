@@ -29,6 +29,15 @@ target_roles:
       level: "Mid-Senior"
       fit: "adjacent"
 
+# Target sectors — read by the scanner to fold into search queries.
+industries:
+  - "Insurance / Reinsurance"
+  - "Banking / Financial Services"
+  - "Technology / SaaS"
+
+# Free-text deal-breakers / preferences (no on-site, no startups <20, etc.)
+preferences: "No rigid 5-day on-site. No startups under 20 people."
+
 narrative:
   # Your professional headline (1 line)
   headline: "ML Engineer turned AI product builder"

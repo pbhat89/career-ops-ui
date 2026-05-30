@@ -74,3 +74,7 @@ package-lock.json
 
 # gstack/conductor worktrees — never track
 .claude/worktrees/
+
+# Backup files (never commit tracker/data backups)
+data/*.bak
+*.bak
