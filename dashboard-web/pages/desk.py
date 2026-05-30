@@ -392,6 +392,13 @@ def evaluate_dialog(rows: pd.DataFrame):
         try:
             proc = batch.start_batch(parallel=parallel, dry_run=dry_run)
             st.session_state["show_eval_dialog"] = False
+            # Signal the progress section to keep auto-refreshing through the
+            # launch handshake: the runner needs a few seconds to write its
+            # first 'processing' row, before which the state snapshot still
+            # looks idle. Without this flag the page would freeze until a
+            # manual rerun (e.g. navigating into a role and back).
+            st.session_state["batch_launching"] = True
+            st.session_state["batch_launch_ticks"] = 0
             st.toast(f"Batch started (PID {proc.pid}) with {parallel} worker(s).", icon="🚀")
             st.rerun()
         except Exception as e:
@@ -881,23 +888,55 @@ summary = batch.state_summary() if not state_df.empty else {"active": False, "to
                                                               "completed": 0, "failed": 0,
                                                               "in_progress": 0, "pending": 0}
 
-if not state_df.empty:
-    if summary["active"] and st_autorefresh is not None:
-        st_autorefresh(interval=2000, limit=900, key="batch_autorefresh")
+# Decide whether to keep the live-progress loop running. The naive "state
+# snapshot shows active work" check misses the launch handshake: a freshly
+# spawned runner needs a few seconds to write its first 'processing' row, and
+# until then the on-disk state still looks idle (empty, or the PREVIOUS run's
+# Done rows). We therefore also refresh while the runner process is alive, and
+# while we're still waiting for a just-launched runner to appear.
+runner_live = batch.runner_alive()
+launching = bool(st.session_state.get("batch_launching"))
+if runner_live or summary["active"]:
+    # Runner has taken over (or state already shows work) — handshake complete.
+    st.session_state["batch_launching"] = False
+    launching = False
+elif launching:
+    # Still waiting for the runner to come up. Bound the wait so a runner that
+    # failed to start can't spin the page forever (~30s at one tick / 2s).
+    ticks = int(st.session_state.get("batch_launch_ticks", 0)) + 1
+    st.session_state["batch_launch_ticks"] = ticks
+    if ticks > 15:
+        st.session_state["batch_launching"] = False
+        launching = False
 
-    total = summary["total"] or 1
-    done = summary["completed"] + summary["failed"]
-    pct = done / total if total else 0
-    status_word = "Running…" if summary["active"] else "Done"
+# "Starting" = a batch we just launched whose runner hasn't written state yet.
+# During that window the on-disk state is still the previous run's, so we must
+# not surface its stale counts.
+starting = launching and not summary["active"] and not runner_live
+should_refresh = summary["active"] or runner_live or launching
+
+if should_refresh and st_autorefresh is not None:
+    st_autorefresh(interval=2000, limit=900, key="batch_autorefresh")
+
+if not state_df.empty or starting:
+    active = summary["active"] or runner_live
+    if starting:
+        headline = "Starting workers…"
+        pct = 0.0
+        stats = [("In flight", 0), ("Failed", 0)]
+    else:
+        total = summary["total"] or 1
+        done = summary["completed"] + summary["failed"]
+        pct = done / total if total else 0
+        status_word = "Running…" if active else "Done"
+        headline = f'{done}/{summary["total"]} — {int(pct*100)}% · {status_word}'
+        stats = [("In flight", summary["in_progress"]), ("Failed", summary["failed"])]
 
     st.markdown(
         status_strip_html(
             label="Batch evaluation",
-            headline=f'{done}/{summary["total"]} — {int(pct*100)}% · {status_word}',
-            stats=[
-                ("In flight", summary["in_progress"]),
-                ("Failed", summary["failed"]),
-            ],
+            headline=headline,
+            stats=stats,
             progress=pct,
         ),
         unsafe_allow_html=True,
@@ -908,7 +947,8 @@ if not state_df.empty:
         with st.expander(f"Live log — {log_name}", expanded=False):
             st.code(log_tail, language="text")
 
-    if not summary["active"]:
+    # Offer "Clear" only when truly idle — not while starting or running.
+    if not active and not starting:
         if st.button("Clear batch state", key="clear_batch_state",
                      help="Removes batch-input.tsv and batch-state.tsv so this strip disappears."):
             (project_root() / "batch" / "batch-state.tsv").unlink(missing_ok=True)
