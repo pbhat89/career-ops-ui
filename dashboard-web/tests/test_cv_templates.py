@@ -94,3 +94,56 @@ def test_single_eval_request_template_defaults_empty():
     from services import single_eval
     req = single_eval.SingleEvalRequest(num=1, url="https://x", company="ACME", role="Lead")
     assert req.template == ""
+
+
+# ── Visual preview rendering ────────────────────────────────────────────
+
+def test_render_example_html_fills_every_template():
+    """Each registered template renders to HTML with no leftover {{PLACEHOLDER}}
+    tokens and recognizable example content."""
+    import re
+    for tpl in cv_templates.list_templates():
+        html = cv_templates.render_example_html(tpl.slug)
+        assert html, f"No preview HTML for {tpl.slug}"
+        # The bundled example person must appear.
+        assert "Alex Chen" in html
+        # No unresolved placeholders should remain.
+        assert not re.search(r"\{\{[A-Z_]+\}\}", html), f"Leftover placeholder in {tpl.slug}"
+
+
+def test_render_example_html_inlines_fonts_not_relative_paths():
+    """The preview iframe can't reach ./fonts/, so font refs must be inlined
+    as data URIs (when the fonts dir is present)."""
+    from services import project_root
+    html = cv_templates.render_example_html("classic")
+    assert html is not None
+    if (project_root() / "fonts").is_dir():
+        assert "url('./fonts/" not in html
+        assert "data:font/woff2;base64," in html
+
+
+def test_render_example_html_none_for_unknown_slug():
+    assert cv_templates.render_example_html("does-not-exist") is None
+    assert cv_templates.render_example_html(None) is None
+
+
+def test_render_example_html_none_when_file_missing(tmp_path, monkeypatch):
+    """A registry entry pointing at a missing file yields None, not a crash."""
+    import json
+    payload = {
+        "default": "ghost",
+        "templates": [
+            {"slug": "ghost", "label": "Ghost", "file": "nope-does-not-exist.html"},
+        ],
+    }
+    p = tmp_path / "reg.json"
+    p.write_text(json.dumps(payload), encoding="utf-8")
+    monkeypatch.setattr(cv_templates, "_registry_path", lambda: p)
+    assert cv_templates.render_example_html("ghost") is None
+
+
+def test_render_example_html_strips_empty_certifications():
+    """The empty certifications block must not leave a dangling section."""
+    html = cv_templates.render_example_html("classic")
+    assert html is not None
+    assert "<!-- CERTIFICATIONS -->" not in html

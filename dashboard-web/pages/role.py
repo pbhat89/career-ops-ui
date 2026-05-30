@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover — degrade gracefully on minimal installs
     fitz = None
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from services import tracker, reports, styling, project_root, single_eval, batch, runner, interest
 from services import cv_templates
@@ -225,6 +226,27 @@ with side:
         tpl_match = next((t for t in tpl_options if t.slug == tpl_choice_slug), None)
         if tpl_match and tpl_match.blurb:
             st.caption(tpl_match.blurb)
+
+        # ── Visual preview of the chosen format ───────────────────────
+        # Shows the template rendered with bundled EXAMPLE data (Alex Chen),
+        # not the user's cv.md — purely so they can compare layouts before
+        # committing. No claude run, no PDF: the real CV is built only when
+        # they hit Generate below, and only with this one chosen template.
+        with st.expander("👁 Preview this format", expanded=True):
+            preview_html = cv_templates.render_example_html(tpl_choice_slug)
+            if preview_html:
+                # The side panel is narrow; zoom the A4 page down so the whole
+                # layout is legible as a thumbnail. zoom reflows (unlike
+                # transform:scale), so scrollbars stay sane.
+                scaled = preview_html.replace(
+                    "</head>",
+                    "<style>html{zoom:0.42;}body{margin:0;}</style></head>",
+                    1,
+                )
+                components.html(scaled, height=600, scrolling=True)
+                st.caption("Example data — your real CV is built on Generate.")
+            else:
+                st.caption("Preview unavailable for this template.")
 
         if not is_evaluated:
             if st.button("✨ Generate evaluation", type="primary", use_container_width=True,
