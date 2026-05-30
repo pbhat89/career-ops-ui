@@ -91,6 +91,22 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", str(text).lower()).strip("-")
 
 
+# Legitimacy values are a short tier ("High Confidence", "Proceed with Caution",
+# "Suspicious", "Expired", "Insufficient Data") plus optional parenthetical/dash
+# qualifiers. Collapse to a one- or two-word badge so it fits the metric box.
+_LEGIT_TIERS = {
+    "high confidence":      "High",
+    "proceed with caution": "Caution",
+    "insufficient data":    "Limited",
+}
+
+
+def _legit_tier(text: str) -> str:
+    # Strip qualifiers after "(" or "—"/"-", then map known tiers.
+    base = re.split(r"\s*[(—-]", str(text).strip(), maxsplit=1)[0].strip()
+    return _LEGIT_TIERS.get(base.lower(), base.split()[0] if base else "—")
+
+
 company_slug = _slug(company)
 pdf_rel = safe_str(report.pdf) if report else ""
 cl_rel = safe_str(report.cover_letter) if report else ""
@@ -377,7 +393,10 @@ with main:
     m1.metric("Score", f"{score:.1f}/5" if score is not None else "—")
     m2.metric("Status", status)
     if report and has_value(report.legitimacy):
-        m3.metric("Legitimacy", report.legitimacy[:22])
+        # The metric value box is sized for short text and ellipsizes long
+        # strings mid-word ("Proceed with Caution" → "Procee…"). Show the
+        # compact tier and keep the full verdict in the tooltip.
+        m3.metric("Legitimacy", _legit_tier(report.legitimacy), help=report.legitimacy)
     elif report and has_value(report.archetype):
         m3.metric("Archetype", report.archetype[:22])
     else:
