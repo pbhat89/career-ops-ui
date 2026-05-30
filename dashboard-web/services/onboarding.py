@@ -110,6 +110,20 @@ REGION_OPTIONS = [
 # Step 5 remote modes
 REMOTE_OPTIONS = ["onsite", "hybrid", "remote", "flexible"]
 
+# Step 5 industries (target sectors). Folded into search_queries and written
+# to config/profile.yml as a top-level `industries:` list.
+INDUSTRY_OPTIONS = [
+    "Insurance / Reinsurance",
+    "Banking / Financial Services",
+    "Healthcare / Pharma",
+    "Technology / SaaS",
+    "Consulting / Professional Services",
+    "Government / Public Sector",
+    "Retail / Consumer",
+    "Telco / Logistics / Energy",
+    "Other",
+]
+
 
 # ── Public helpers ────────────────────────────────────────────────────
 
@@ -160,6 +174,10 @@ class OnboardingState:
     salary_target_high: int = 0
     remote_preference: str = "flexible"
     regional_preference: list[str] = field(default_factory=list)
+
+    # Step 5b — industries + free-text preferences / deal-breakers
+    industries: list[str] = field(default_factory=list)
+    preferences: str = ""
 
     # Step 6 — companies (name -> bool). Custom entries get appended to
     # ``custom_companies`` and shown alongside the defaults.
@@ -333,6 +351,13 @@ def _build_profile_yaml(state: OnboardingState) -> str:
         "  archetypes:",
         "\n".join(archetype_blocks),
         "",
+        "# Target sectors — read by the scanner to fold into search queries.",
+        "industries:",
+        _yaml_list(state.industries, indent=2),
+        "",
+        "# Free-text deal-breakers / preferences (no on-site, no startups <20, etc.)",
+        "preferences: " + _yaml_str(state.preferences),
+        "",
         "narrative:",
         "  headline: " + _yaml_str(state.superpower.splitlines()[0] if state.superpower else ""),
         "  exit_story: " + _yaml_str(state.excites_drains),
@@ -477,6 +502,12 @@ def _build_portals_yaml(state: OnboardingState, *, root: Optional[Path] = None) 
     if state.target_titles:
         text = _replace_positive_titles(text, state.target_titles)
 
+    # 1b. Generate search_queries from titles × industries × location so the
+    # WebSearch scan has good defaults out of the box.
+    queries = _build_search_queries(state)
+    if queries:
+        text = _replace_search_queries(text, queries)
+
     # 2. Apply company toggles. The defaults file ships almost everything
     # as enabled: true; for any entry where the user un-ticked the
     # checkbox we flip the company's `enabled:` line to false.
@@ -514,6 +545,83 @@ def _replace_positive_titles(text: str, titles: list[str]) -> str:
     return text  # Nothing to replace — leave as-is.
 
 
+def _location_clause(location: str) -> str:
+    """Best-effort 'City Country' string for a search query. Empty if unset."""
+    if not location:
+        return ""
+    parts = [p.strip() for p in location.split(",") if p.strip()]
+    return " ".join(parts)
+
+
+def _build_search_queries(state: OnboardingState) -> list[dict[str, str]]:
+    """Build up to ~10 WebSearch query dicts from titles × industries × location.
+
+    Each item: {name, query, enabled}. Industries are folded into a single
+    parenthesised OR group; the location (city/country) is appended. Robust to
+    empty industries/location — those clauses are simply omitted.
+    """
+    titles = state.target_titles or []
+    if not titles:
+        return []
+
+    industries = [i for i in state.industries if i.strip()]
+    location = _location_clause(state.location)
+
+    # Parenthesised OR group of industries, e.g. ("Insurance" OR "Banking").
+    industry_group = ""
+    if industries:
+        industry_group = "(" + " OR ".join(f'"{i}"' for i in industries) + ")"
+
+    industries_label = ", ".join(industries) if industries else ""
+
+    queries: list[dict[str, str]] = []
+    for title in titles[:10]:
+        # name format: "<title> — <industries> <location>"
+        tail = " ".join(p for p in [industries_label, location] if p)
+        name = f"{title} — {tail}" if tail else title
+
+        query_parts = [f'"{title}"']
+        if industry_group:
+            query_parts.append(industry_group)
+        if location:
+            query_parts.append(location)
+        query = " ".join(query_parts)
+
+        queries.append({"name": name, "query": query, "enabled": True})
+
+    return queries
+
+
+def _render_search_queries(queries: list[dict[str, str]]) -> str:
+    """Render a search_queries: YAML block from query dicts."""
+    lines = ["search_queries:"]
+    for q in queries:
+        lines.append(f"  - name: {q['name']}")
+        # Single-quote the query; escape embedded single quotes YAML-style.
+        safe = q["query"].replace("'", "''")
+        lines.append(f"    query: '{safe}'")
+        lines.append(f"    enabled: {'true' if q['enabled'] else 'false'}")
+    return "\n".join(lines)
+
+
+def _replace_search_queries(text: str, queries: list[dict[str, str]]) -> str:
+    """Replace an existing top-level search_queries: block, or append one.
+
+    The block runs from the `search_queries:` line up to (but not including)
+    the next top-level key (a line starting in column 0 that isn't a comment
+    or blank) — typically `tracked_companies:`.
+    """
+    block = _render_search_queries(queries)
+    pattern = re.compile(
+        r"^search_queries:.*?(?=^\S)",
+        re.MULTILINE | re.DOTALL,
+    )
+    if pattern.search(text):
+        return pattern.sub(block + "\n\n", text, count=1)
+    # No existing section — append at the end.
+    return text.rstrip() + "\n\n" + block + "\n"
+
+
 def _set_company_enabled(text: str, company_name: str, enabled: bool) -> str:
     """Flip the `enabled:` line inside the tracked_companies entry whose
     `- name:` matches *company_name*. Idempotent."""
@@ -543,6 +651,8 @@ def _portals_skeleton(state: OnboardingState) -> str:
             f"    scan_query: '\"{name}\" careers jobs'\n"
             f"    enabled: true\n"
         )
+    queries = _build_search_queries(state)
+    search_block = _render_search_queries(queries) if queries else "search_queries: []"
     return f"""# Generated by the dashboard onboarding wizard.
 title_filter:
   positive:
@@ -551,7 +661,7 @@ title_filter:
     - "Junior"
     - "Intern"
 
-search_queries: []
+{search_block}
 
 tracked_companies:{custom or '  []'}
 """

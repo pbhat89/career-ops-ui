@@ -82,6 +82,8 @@ def _full_state() -> ob.OnboardingState:
         salary_target_high=600_000,
         remote_preference="hybrid",
         regional_preference=["Singapore", "APAC"],
+        industries=["Insurance / Reinsurance", "Banking / Financial Services"],
+        preferences="No rigid 5-day on-site. No startups under 20.",
         company_enabled=ob.default_company_state(),
         custom_companies=["Munich Re", "Trust Bank"],
         superpower="APAC analytics ops at scale; 90-day AI ship cycles.",
@@ -189,6 +191,85 @@ def test_build_portals_disables_unchecked_company(temp_root: Path):
 
     # Custom titles win the positive-titles section
     assert '- "Head of AI"' in yaml_text
+
+
+def test_profile_yaml_persists_industries_and_preferences(temp_root: Path):
+    """Industries (top-level YAML list) and preferences (string) must be
+    written into config/profile.yml exactly under those keys."""
+    state = _full_state()
+    ob.save_all(state, root=temp_root)
+
+    profile_text = (temp_root / "config" / "profile.yml").read_text(encoding="utf-8")
+
+    # Top-level `industries:` list with each selected sector as an item.
+    assert "industries:" in profile_text
+    assert '- "Insurance / Reinsurance"' in profile_text
+    assert '- "Banking / Financial Services"' in profile_text
+
+    # Top-level `preferences:` string.
+    assert "preferences:" in profile_text
+    assert "No rigid 5-day on-site" in profile_text
+
+
+def test_build_portals_generates_search_queries_from_titles_and_industries(
+    temp_root: Path,
+):
+    """search_queries must be regenerated from titles × industries × location,
+    replacing whatever the template shipped."""
+    templates_dir = temp_root / "templates"
+    templates_dir.mkdir(parents=True, exist_ok=True)
+    (templates_dir / "portals.example.yml").write_text(
+        "title_filter:\n"
+        "  positive:\n"
+        "    - \"AI\"\n"
+        "  negative:\n"
+        "    - \"Junior\"\n"
+        "\n"
+        "search_queries:\n"
+        "  - name: Old query\n"
+        "    query: 'should be replaced'\n"
+        "    enabled: true\n"
+        "\n"
+        "tracked_companies:\n"
+        "  - name: Anthropic\n"
+        "    careers_url: https://job-boards.greenhouse.io/anthropic\n"
+        "    enabled: true\n",
+        encoding="utf-8",
+    )
+
+    state = ob.OnboardingState(
+        target_titles=["Head of AI", "Head of Data"],
+        industries=["Insurance / Reinsurance", "Banking / Financial Services"],
+        location="Singapore, Singapore",
+    )
+    yaml_text = ob._build_portals_yaml(state, root=temp_root)
+
+    # The shipped placeholder query must be gone.
+    assert "should be replaced" not in yaml_text
+    assert "Old query" not in yaml_text
+
+    # A query per title, with industries folded into an OR group + location.
+    assert 'name: Head of AI —' in yaml_text
+    assert 'name: Head of Data —' in yaml_text
+    assert '"Head of AI"' in yaml_text
+    assert '("Insurance / Reinsurance" OR "Banking / Financial Services")' in yaml_text
+    assert "Singapore" in yaml_text
+
+    # tracked_companies section must survive the replacement intact.
+    assert "tracked_companies:" in yaml_text
+    assert "- name: Anthropic" in yaml_text
+
+
+def test_build_search_queries_robust_to_empty_industries_and_location():
+    """No industries / no location → query is just the quoted title, no crash."""
+    state = ob.OnboardingState(target_titles=["Head of AI"])
+    queries = ob._build_search_queries(state)
+    assert len(queries) == 1
+    assert queries[0]["query"] == '"Head of AI"'
+    assert queries[0]["name"] == "Head of AI"
+
+    # No titles at all → empty list (nothing to scan for).
+    assert ob._build_search_queries(ob.OnboardingState()) == []
 
 
 def test_build_portals_falls_back_when_template_missing(temp_root: Path):

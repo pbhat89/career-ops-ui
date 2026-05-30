@@ -408,9 +408,23 @@ def _stamp_refresh() -> None:
         pass
 
 
-def _execute_scan(*, dry_run: bool, company: str | None, titles: list[str] | None):
-    """Run scan.mjs with a live log, promote new offers into the tracker, and
-    render the outcome. Shared by all three scan modes."""
+def _stash_scan_results(offers: list, label: str, dupes: int = 0) -> None:
+    """Park found offers in session_state so the picker (rendered after the
+    dialog tabs) can let the user choose which to add. Does NOT auto-promote
+    and does NOT call st.rerun() — that would close the dialog."""
+    st.session_state["scan_results"] = {
+        "offers": list(offers),
+        "label": label,
+        "dupes": int(dupes or 0),
+    }
+
+
+def _execute_scan(*, company: str | None, titles: list[str] | None):
+    """Run scan.mjs with a live log and stash the new offers for the picker.
+
+    Runs NON-dry so scan.mjs still records to scan-history.tsv (dedup). Promotion
+    to the tracker is now controlled by `_render_scan_picker`, not here.
+    Shared by the full-sweep / by-company / by-title scan modes."""
     st.markdown("###### Scan log")
     log_box = st.empty()
     buf: list[str] = []
@@ -420,7 +434,7 @@ def _execute_scan(*, dry_run: bool, company: str | None, titles: list[str] | Non
         log_box.code("\n".join(buf[-200:]), language="text")
 
     log_box.code("Starting scan…", language="text")
-    summary = runner.scan_stream(_on_line, dry_run=dry_run, company=company, titles=titles)
+    summary = runner.scan_stream(_on_line, dry_run=False, company=company, titles=titles)
     if buf:
         log_box.code("\n".join(buf[-200:]), language="text")
 
@@ -460,28 +474,14 @@ def _execute_scan(*, dry_run: bool, company: str | None, titles: list[str] | Non
     _stamp_refresh()
 
     if n_new > 0 and offers:
-        if dry_run:
-            st.success(
-                f"**{n_new} new offer(s)** across {scanned} companies · {dupes} duplicates skipped. "
-                f"_(dry run — nothing written. Uncheck dry run to add them to the tracker.)_"
-            )
-        else:
-            promo = tracker.promote_scanned_offers(offers)
-            st.cache_data.clear()
-            added = promo.get("added", 0)
-            skipped = promo.get("skipped", 0)
-            extra = f" · {skipped} already tracked" if skipped else ""
-            st.success(
-                f"**{added} new offer(s)** added to the worklist as *Pending* "
-                f"(across {scanned} companies · {dupes} duplicates skipped{extra}). "
-                f"Close this dialog to see them at the top of the table — then select and **Evaluate**."
-            )
-        _offers_df = pd.DataFrame(offers)[["company", "title", "location", "url"]]
-        st.dataframe(
-            _offers_df,
-            hide_index=True, use_container_width=True,
-            height=min(520, 38 + 35 * (len(_offers_df) + 1)),
-            column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
+        label = (
+            f"{company} ({scanned} portal{'s' if scanned != 1 else ''})" if company
+            else f"{scanned} companies"
+        )
+        _stash_scan_results(offers, label, dupes)
+        st.success(
+            f"**{n_new} new offer(s)** found across {scanned} companies "
+            f"· {dupes} duplicates skipped. Pick which to add below."
         )
     else:
         api_count, _ = _count_portal_apis()
@@ -500,37 +500,9 @@ def _execute_scan(*, dry_run: bool, company: str | None, titles: list[str] | Non
                 st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
 
 
-def _render_scan_offers(offers: list, scanned_label: str, dry_run: bool, dupes: int = 0):
-    """Promote offers into the tracker (unless dry run) and show the result table."""
-    if dry_run:
-        st.success(
-            f"**{len(offers)} offer(s)** found via {scanned_label}. "
-            f"_(dry run — nothing written. Uncheck dry run to add them to the tracker.)_"
-        )
-    else:
-        promo = tracker.promote_scanned_offers(offers)
-        st.cache_data.clear()
-        added = promo.get("added", 0)
-        skipped = promo.get("skipped", 0)
-        extra = f" · {skipped} already tracked" if skipped else ""
-        dup_txt = f" · {dupes} duplicates skipped" if dupes else ""
-        st.success(
-            f"**{added} new offer(s)** added to the worklist as *Pending* "
-            f"(via {scanned_label}{dup_txt}{extra}). "
-            f"Close this dialog to see them at the top of the table — then select and **Evaluate**."
-        )
-    _df = pd.DataFrame(offers)
-    cols = [c for c in ("company", "title", "location", "url") if c in _df.columns]
-    st.dataframe(
-        _df[cols], hide_index=True, use_container_width=True,
-        height=min(520, 38 + 35 * (len(_df) + 1)),
-        column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
-    )
-
-
-def _execute_websearch_scan(*, dry_run: bool, company: str | None, titles: list[str] | None):
-    """Run a WebSearch scan via `claude -p`, then promote new offers. One long
-    Claude call, so we show a spinner rather than a per-company log."""
+def _execute_websearch_scan(*, company: str | None, titles: list[str] | None):
+    """Run a WebSearch scan via `claude -p`, then stash offers for the picker.
+    One long Claude call, so we show a spinner rather than a per-company log."""
     if not batch.claude_cli_available():
         st.error("`claude` CLI not found on PATH. Install Claude Code to use WebSearch scans.")
         return
@@ -553,7 +525,8 @@ def _execute_websearch_scan(*, dry_run: bool, company: str | None, titles: list[
     offers = summary.get("offers") or []
     _stamp_refresh()
     if offers:
-        _render_scan_offers(offers, f"Claude {label}", dry_run)
+        _stash_scan_results(offers, f"Claude {label}")
+        st.success(f"**{len(offers)} posting(s)** found via Claude {label}. Pick which to add below.")
     else:
         st.warning(
             "0 postings found. The web search ran but returned nothing usable — "
@@ -561,6 +534,73 @@ def _execute_websearch_scan(*, dry_run: bool, company: str | None, titles: list[
         )
     with st.expander("Raw Claude response"):
         st.code((summary.get("_raw_stdout") or "")[-3000:], language="text")
+
+
+def _render_scan_picker():
+    """Render the 'Add to worklist' picker for stashed scan results.
+
+    Lives in session_state["scan_results"], so it persists across the dialog's
+    reruns while the user ticks boxes. The user picks which offers to promote;
+    nothing is auto-added."""
+    results = st.session_state.get("scan_results") or {}
+    offers = results.get("offers") or []
+    label = results.get("label") or "the scan"
+    dupes = int(results.get("dupes") or 0)
+    if not offers:
+        st.session_state.pop("scan_results", None)
+        return
+
+    st.divider()
+    dup_txt = f" · {dupes} duplicates already skipped" if dupes else ""
+    st.markdown(f"###### Add to worklist — {len(offers)} found via {label}{dup_txt}")
+    st.caption("Untick anything you don't want. Selected roles are added as **Pending**, ready to evaluate.")
+
+    picker_df = pd.DataFrame(offers)
+    for col in ("company", "title", "location", "url"):
+        if col not in picker_df.columns:
+            picker_df[col] = ""
+    picker_df = picker_df[["company", "title", "location", "url"]].copy()
+    picker_df.insert(0, "Add", True)
+
+    edited = st.data_editor(
+        picker_df,
+        hide_index=True,
+        use_container_width=True,
+        height=min(520, 38 + 35 * (len(picker_df) + 1)),
+        key="scan_picker_editor",
+        column_config={
+            "Add": st.column_config.CheckboxColumn("Add", default=True, width="small"),
+            "company": st.column_config.TextColumn("Company", disabled=True),
+            "title": st.column_config.TextColumn("Title", disabled=True),
+            "location": st.column_config.TextColumn("Location", disabled=True, width="small"),
+            "url": st.column_config.LinkColumn("url", display_text="open", disabled=True),
+        },
+    )
+
+    pc1, pc2 = st.columns([2, 1])
+    if pc1.button("➕ Add selected to worklist", type="primary", use_container_width=True,
+                  key="scan_picker_add"):
+        # Map edited rows back to the original offer dicts by position.
+        try:
+            mask = list(edited["Add"])
+        except Exception:
+            mask = [True] * len(offers)
+        selected = [offers[i] for i, keep in enumerate(mask) if keep and i < len(offers)]
+        if not selected:
+            st.warning("Nothing selected — tick at least one row.")
+            return
+        promo = tracker.promote_scanned_offers(selected)
+        added = promo.get("added", 0)
+        skipped = promo.get("skipped", 0)
+        st.session_state.pop("scan_results", None)
+        st.cache_data.clear()
+        extra = f" ({skipped} already tracked)" if skipped else ""
+        st.success(
+            f"Added {added} to the worklist as Pending — close this dialog to evaluate them.{extra}"
+        )
+    if pc2.button("Discard results", use_container_width=True, key="scan_picker_discard"):
+        st.session_state.pop("scan_results", None)
+        st.caption("Results discarded. Run another scan above when ready.")
 
 
 @st.dialog("Scan portals", width="large")
@@ -576,11 +616,9 @@ def scan_dialog():
         unsafe_allow_html=True,
     )
     st.caption(
-        "New roles are added to the worklist as **Pending** — open this dialog, run a scan, "
-        "then close it to see and evaluate them in the table."
+        "Run a scan, then **pick** which roles to add to the worklist as Pending "
+        "from the picker that appears below — nothing is added until you choose."
     )
-
-    dry_run = st.toggle("Dry run (preview only — nothing written)", value=False, key="scan_dryrun")
 
     tab_full, tab_company, tab_title, tab_web = st.tabs(
         ["🔄 Full sweep", "🏢 By company", "🔎 By title", "🌐 Web search (Claude)"]
@@ -591,7 +629,7 @@ def scan_dialog():
         st.markdown("**Scan every portal for roles posted since the last scan.**")
         st.caption("Hits all API-backed companies with your configured title filter. The default sweep.")
         if st.button("Run full sweep", type="primary", use_container_width=True, key="scan_full"):
-            _execute_scan(dry_run=dry_run, company=None, titles=None)
+            _execute_scan(company=None, titles=None)
 
     # 2. By company — one company, across all of its portals.
     with tab_company:
@@ -605,7 +643,7 @@ def scan_dialog():
                 st.write(", ".join(portal_names))
         if st.button("Scan company", type="primary", use_container_width=True,
                      key="scan_company_run", disabled=not company.strip()):
-            _execute_scan(dry_run=dry_run, company=company.strip(), titles=None)
+            _execute_scan(company=company.strip(), titles=None)
 
     # 3. By title — find roles matching a title across all portals.
     with tab_title:
@@ -619,7 +657,7 @@ def scan_dialog():
         titles = [t.strip() for t in titles_raw.split(",") if t.strip()]
         if st.button("Scan by title", type="primary", use_container_width=True,
                      key="scan_title_run", disabled=not titles):
-            _execute_scan(dry_run=dry_run, company=None, titles=titles)
+            _execute_scan(company=None, titles=titles)
 
     # 4. Web search — covers WebSearch-only sources (LinkedIn, eFinancialCareers,
     #    recruiters) the zero-token engine can't reach. Uses Claude tokens.
@@ -648,10 +686,16 @@ def scan_dialog():
                         (web_focus == "By title" and not web_titles)
         if st.button("Run web search", type="primary", use_container_width=True,
                      key="scan_web_run", disabled=_web_disabled):
-            _execute_websearch_scan(dry_run=dry_run, company=web_company, titles=web_titles)
+            _execute_websearch_scan(company=web_company, titles=web_titles)
+
+    # Picker persists across reruns while the user ticks boxes (the dialog
+    # stays open). Rendered AFTER the tabs so it sits below the scan log.
+    if st.session_state.get("scan_results"):
+        _render_scan_picker()
 
     if st.button("Close", use_container_width=True, key="scan_close"):
         st.session_state["show_scan_dialog"] = False
+        st.session_state.pop("scan_results", None)
         st.rerun()
 
 

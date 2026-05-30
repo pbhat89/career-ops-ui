@@ -318,8 +318,11 @@ def promote_scanned_offers(offers: list[dict]) -> dict:
         # Sanitize the whole note — the URL can be LLM output (WebSearch mode);
         # a stray pipe/newline would otherwise corrupt the markdown table row.
         note = _cell(" ".join(note_bits))
+        # Unscored rows use "N/A" — the canonical empty score that
+        # verify-pipeline.mjs accepts (it rejects "-/5"). load_applications
+        # parses both as no-score, so the worklist still shows them unscored.
         new_rows.append(
-            f"| {max_num} | {today} | {company} | {role} | -/5 | Pending | ❌ | - | {note} |"
+            f"| {max_num} | {today} | {company} | {role} | N/A | Pending | ❌ | - | {note} |"
         )
         result["added"] += 1
         result["nums"].append(max_num)
