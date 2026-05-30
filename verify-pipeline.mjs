@@ -193,4 +193,22 @@ if (errors === 0 && warnings === 0) {
   console.log('🔴 Pipeline has errors — fix before proceeding');
 }
 
+// --- How to fix ---
+// Every error/warning above maps to a one-line fix. Surface the exact command
+// so the user never has to guess (DX: an error names the problem AND the fix).
+const fixes = [];
+if (badStatuses > 0) fixes.push('Non-canonical/bold/dated statuses → node normalize-statuses.mjs');
+if (badScores > 0)   fixes.push('Invalid score format → set unscored entries to "N/A" (or backfill the real X.X/5 score)');
+if (dupes > 0)       fixes.push('Possible duplicates → node dedup-tracker.mjs');
+if (pendingTsvs > 0) fixes.push('Unmerged tracker-additions → node merge-tracker.mjs');
+if (boldScores > 0)  fixes.push('Markdown bold in score → remove the ** around the score');
+if (brokenReports > 0) fixes.push('Missing report files → restore the report or fix the link in applications.md');
+if (badRows > 0)     fixes.push('Rows with <9 columns → add the missing tab-separated columns in applications.md');
+
+if (fixes.length > 0) {
+  console.log('\nHow to fix:');
+  for (const f of fixes) console.log(`  → ${f}`);
+  console.log('  Then re-run: node verify-pipeline.mjs');
+}
+
 process.exit(errors > 0 ? 1 : 0);

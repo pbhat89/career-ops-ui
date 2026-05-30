@@ -1,5 +1,15 @@
 # Changelog
 
+> **How to read this** — entries are grouped per release into **Features** and **Bug Fixes**,
+> newest first. Each line links to the commit/PR.
+>
+> **Upgrading is safe by design.** `node update-system.mjs apply` only touches the
+> **system layer** (scripts, modes, templates). Your **user layer** — `cv.md`,
+> `config/profile.yml`, `modes/_profile.md`, `portals.yml`, `data/`, `reports/`,
+> `output/`, `interview-prep/` — is **never** modified. See `DATA_CONTRACT.md` for the
+> full list. If an update misbehaves, roll back with `node update-system.mjs rollback`.
+> Breaking changes (if any) are called out in the release's notes below.
+
 ## [1.6.0](https://github.com/santifer/career-ops/compare/v1.5.0...v1.6.0) (2026-04-26)
 
 

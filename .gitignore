@@ -71,3 +71,6 @@ dashboard/career-dashboard.exe
 career-dashboard
 package-lock.json
 .gstack/
+
+# gstack/conductor worktrees — never track
+.claude/worktrees/

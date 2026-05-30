@@ -84,10 +84,13 @@ Built by someone who used it to evaluate 740+ job offers, generate 100+ tailored
 # 1. Clone and install
 git clone https://github.com/santifer/career-ops.git
 cd career-ops && npm install
-npx playwright install chromium   # Required for PDF generation
 
 # 2. Check setup
 npm run doctor                     # Validates all prerequisites
+
+# (Optional, deferrable) PDF generation needs a headless browser (~150MB).
+# You can evaluate jobs WITHOUT it — install it before your first PDF:
+#   npx playwright install chromium
 
 # 3. Configure
 cp config/profile.example.yml config/profile.yml  # Edit with your details

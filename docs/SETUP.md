@@ -14,8 +14,13 @@
 git clone https://github.com/santifer/career-ops.git
 cd career-ops
 npm install
-npx playwright install chromium   # Required for PDF generation
+npm run doctor                    # Validates prerequisites — run this first
 ```
+
+> **Playwright is optional up front.** PDF generation needs a headless browser
+> (~150MB download). You can evaluate jobs without it and install it before your
+> first PDF: `npx playwright install chromium`. `npm run doctor` tells you whether
+> it's installed.
 
 ### 2. Configure your profile
 
@@ -67,8 +72,9 @@ Then paste a job offer URL or description. Career-ops will automatically evaluat
 ## Verify Setup
 
 ```bash
+npm run doctor              # Prerequisites + required files (start here)
 node cv-sync-check.mjs      # Check configuration
-node verify-pipeline.mjs     # Check pipeline integrity
+node verify-pipeline.mjs    # Check pipeline integrity (prints exact fix commands)
 ```
 
 ## Build Dashboard (Optional)

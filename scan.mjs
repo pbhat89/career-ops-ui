@@ -381,6 +381,18 @@ async function main() {
   const companyFlag = args.indexOf('--company');
   const filterCompany = companyFlag !== -1 ? args[companyFlag + 1]?.toLowerCase() : null;
 
+  // Warn on unknown flags instead of silently ignoring them — a typo like
+  // `--min-score` would otherwise run a full (wrong) scan with no signal.
+  // The value after --company is not a flag, so it is never flagged here.
+  const KNOWN_FLAGS = new Set(['--dry-run', '--verify', '--company']);
+  const companyValueIdx = companyFlag !== -1 ? companyFlag + 1 : -1;
+  const unknownFlags = args.filter((a, i) =>
+    a.startsWith('--') && !KNOWN_FLAGS.has(a) && i !== companyValueIdx);
+  if (unknownFlags.length > 0) {
+    console.error(`⚠️  Unknown flag(s): ${unknownFlags.join(', ')}`);
+    console.error('   Valid flags: --dry-run, --company <name>, --verify');
+  }
+
   // 1. Load providers
   const providers = await loadProviders(PROVIDERS_DIR);
   if (providers.size === 0) {
@@ -483,7 +495,15 @@ async function main() {
         newOffers.push({ ...job, source: sourceName });
       }
     } catch (err) {
-      errors.push({ company: company.name, error: err.message });
+      // Surface the underlying cause. Node's `fetch` reports a bare
+      // "fetch failed" and stashes the real reason (ENOTFOUND, ETIMEDOUT,
+      // ECONNREFUSED, cert errors) on err.cause — so a user gets problem +
+      // cause, not just "it failed".
+      const cause = err.cause?.code || err.cause?.message;
+      errors.push({
+        company: company.name,
+        error: cause ? `${err.message} (${cause})` : err.message,
+      });
     }
   });
 
@@ -553,6 +573,9 @@ async function main() {
     for (const e of errors) {
       console.log(`  ✗ ${e.company}: ${e.error}`);
     }
+    console.log('  → Usually transient (network/DNS/timeout) — re-run to retry.');
+    console.log('    If it persists, the careers URL or provider may have changed:');
+    console.log('    check that company\'s entry in portals.yml (careers_url / provider / slug).');
   }
 
   if (verifiedOffers.length > 0) {
