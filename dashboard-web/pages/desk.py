@@ -1140,6 +1140,65 @@ with b3:
         else:
             counts = ind_series.value_counts()
             chart_df = counts.rename_axis("Industry").reset_index(name="Count")
-            # Green to match the Signals funnel — st.bar_chart defaults to blue,
-            # which was a third accent fighting the green theme.
-            st.bar_chart(chart_df, x="Industry", y="Count", color="#3DB985", height=200)
+            # Horizontal so long category labels (e.g. "Insurance / Reinsurance",
+            # "Government / Public") stay readable instead of getting rotated 90°.
+            # Green (#3DB985) to match the Signals funnel — st.bar_chart defaults
+            # to blue, a third accent fighting the green theme.
+            st.bar_chart(chart_df, x="Count", y="Industry", color="#3DB985",
+                         horizontal=True, height=220)
+
+
+# ── Insurance / Reinsurance details ──────────────────────────────────
+# The hunt is anchored on insurance / reinsurance leadership roles, so the
+# bar above is only half the story — the concrete rows behind that bar are
+# what's actionable. Surface them.
+
+_insur_re = _INDUSTRY_RULES[0][1]  # (label, pattern) — first entry is Insurance / Reinsurance
+
+
+def _is_insurance(row) -> bool:
+    blob = " ".join(safe_str(row.get(k)) for k in ("company", "role", "notes"))
+    return bool(_insur_re.search(blob))
+
+
+_insur_rows = worklist[worklist.apply(_is_insurance, axis=1)].copy() if not worklist.empty else worklist.iloc[0:0]
+
+if not _insur_rows.empty:
+    with st.container(border=True):
+        st.markdown(f"**Insurance / Reinsurance roles · {len(_insur_rows)}**")
+        st.caption("Rows where company / role / notes mention insurance, reinsurance, insurtech, underwriting, claims, or actuarial work.")
+
+        _insur_view = _insur_rows[["num", "company", "role", "score", "status", "job_url"]].copy()
+        _insur_view["salary"] = _insur_view["num"].map(_salary_map).fillna("")
+        # Resolved posting date if we know it, otherwise the tracker add-date.
+        _insur_view["posted"] = _insur_view["num"].map(_posted_map).fillna("")
+        _insur_view["added"] = _insur_rows["date"].dt.strftime("%Y-%m-%d").fillna("")
+        _insur_view["date"] = _insur_view.apply(
+            lambda r: r["posted"] or r["added"] or "",
+            axis=1,
+        )
+        _insur_view = _insur_view.drop(columns=["posted", "added"])
+        _insur_view["open"] = _insur_view["num"].apply(lambda n: f"/role?num={int(n)}")
+
+        _insur_view = _insur_view.rename(columns={
+            "num": "#", "company": "Company", "role": "Role", "score": "Score",
+            "status": "Status", "job_url": "JD link", "salary": "Salary",
+            "date": "Date", "open": "Review",
+        })
+        _insur_view = _insur_view.sort_values(
+            "Score", ascending=False, na_position="last",
+        )[["#", "Review", "Company", "Role", "Score", "Salary", "Status", "JD link", "Date"]]
+
+        st.dataframe(
+            _insur_view,
+            use_container_width=True,
+            hide_index=True,
+            height=min(360, 60 + 36 * len(_insur_view)),
+            column_config={
+                "Review":  st.column_config.LinkColumn("Review", display_text="open →", width="small"),
+                "JD link": st.column_config.LinkColumn("JD link", display_text="JD ↗",   width="small"),
+                "Score":   st.column_config.NumberColumn("Score", format="%.1f / 5"),
+                "Salary":  st.column_config.TextColumn("Salary", width="small"),
+                "Date":    st.column_config.TextColumn("Date",   width="small"),
+            },
+        )
