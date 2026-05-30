@@ -1140,4 +1140,6 @@ with b3:
         else:
             counts = ind_series.value_counts()
             chart_df = counts.rename_axis("Industry").reset_index(name="Count")
-            st.bar_chart(chart_df, x="Industry", y="Count", height=200)
+            # Green to match the Signals funnel — st.bar_chart defaults to blue,
+            # which was a third accent fighting the green theme.
+            st.bar_chart(chart_df, x="Industry", y="Count", color="#3DB985", height=200)
