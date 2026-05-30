@@ -24,6 +24,9 @@ batch/tracker-additions/**/*.tsv
 batch/cv-prateek-*.html
 batch/cv-*.html
 batch/gen-*.mjs
+batch/build-cv-*.mjs
+# Generated CVs sometimes land in the project root — keep them out of git.
+cv-prateek-*.html
 jds/*
 !jds/.gitkeep
 
