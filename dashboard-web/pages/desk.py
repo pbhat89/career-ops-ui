@@ -212,11 +212,20 @@ n_evaluable = len(pending_with_url)
 fn = _first_name()
 greet = f"{_greeting()}, {fn}" if fn else _greeting()
 
+# "New this week" — Pending rows added in the last 7 days (i.e. fresh from a scan).
+_week_ago = dt.datetime.now() - dt.timedelta(days=7)
+if not df.empty:
+    _fresh_mask = (df["status"] == "Pending") & (df["date"].notna()) & (df["date"] >= _week_ago)
+    n_fresh = int(_fresh_mask.sum())
+else:
+    n_fresh = 0
+
 # Hero — greeting + meta pills line
 _meta_pills = "".join([
     pill_html(f"{n_total} tracked", "default", dot=True),
     "&nbsp;",
     pill_html(f"{n_evaluable} ready to evaluate", "accent", dot=True),
+] + ([("&nbsp;" + pill_html(f"{n_fresh} new this week", "accent", dot=True))] if n_fresh else []) + [
     "&nbsp;",
     pill_html(f"scan: {last_scan}" + (f" (+{scan_new})" if scan_new else ""), "info"),
 ] + ([("&nbsp;" + pill_html(f"refreshed {last_refresh}", "muted"))] if last_refresh else []))
@@ -271,8 +280,8 @@ with r1c2:
     st.markdown(
         '<div class="action-card">'
         '<div class="ac-label">Scan</div>'
-        '<div class="ac-headline">Fresh portal sweep</div>'
-        '<div class="ac-sub">Greenhouse · Ashby · Lever — skips anything already in the tracker.</div>'
+        '<div class="ac-headline">Find new roles</div>'
+        '<div class="ac-sub">Full sweep · by company · by title. New roles land in the worklist as Pending.</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -389,109 +398,261 @@ def evaluate_dialog(rows: pd.DataFrame):
             st.error(f"Failed to start batch: {e}")
 
 
-@st.dialog("Scan portals")
+def _stamp_refresh() -> None:
+    """Persist a fresh .last-refresh stamp so the freshness banner clears."""
+    try:
+        marker = project_root() / LAST_REFRESH_PATH
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(dt.datetime.now().isoformat(), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _execute_scan(*, dry_run: bool, company: str | None, titles: list[str] | None):
+    """Run scan.mjs with a live log, promote new offers into the tracker, and
+    render the outcome. Shared by all three scan modes."""
+    st.markdown("###### Scan log")
+    log_box = st.empty()
+    buf: list[str] = []
+
+    def _on_line(line: str) -> None:
+        buf.append(line)
+        log_box.code("\n".join(buf[-200:]), language="text")
+
+    log_box.code("Starting scan…", language="text")
+    summary = runner.scan_stream(_on_line, dry_run=dry_run, company=company, titles=titles)
+    if buf:
+        log_box.code("\n".join(buf[-200:]), language="text")
+
+    # ── Failure paths (structured hints from scan.mjs) ────────────────
+    if not summary.get("ok"):
+        hint = summary.get("hint")
+        errors = summary.get("errors") or []
+        if hint == "no-api":
+            names = ", ".join(summary.get("matched_names") or [])
+            st.info(
+                f"**{names}** has no Greenhouse / Ashby / Lever / Workday / MCF endpoint, so the "
+                f"zero-token scanner can't reach it. Add an ATS endpoint in **Settings → Portals**, "
+                f"or use `/career-ops scan` in Claude Code for a WebSearch-based scan."
+            )
+        elif hint == "no-match":
+            st.warning(
+                f"No company in portals.yml matches **{summary.get('filter_company','?')}**. "
+                f"Check the spelling — the list below shows the companies the scanner can reach."
+            )
+        else:
+            st.error("Scan failed.")
+            if errors:
+                for e in errors:
+                    st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
+            else:
+                stderr = summary.get("_raw_stderr") or ""
+                if stderr.strip():
+                    st.code(stderr[-1500:], language="text")
+        return
+
+    # ── Success ───────────────────────────────────────────────────────
+    n_new = int(summary.get("new_offers") or 0)
+    scanned = int(summary.get("companies_scanned") or 0)
+    dupes = int(summary.get("duplicates") or 0)
+    offers = summary.get("offers") or []
+
+    _stamp_refresh()
+
+    if n_new > 0 and offers:
+        if dry_run:
+            st.success(
+                f"**{n_new} new offer(s)** across {scanned} companies · {dupes} duplicates skipped. "
+                f"_(dry run — nothing written. Uncheck dry run to add them to the tracker.)_"
+            )
+        else:
+            promo = tracker.promote_scanned_offers(offers)
+            st.cache_data.clear()
+            added = promo.get("added", 0)
+            skipped = promo.get("skipped", 0)
+            extra = f" · {skipped} already tracked" if skipped else ""
+            st.success(
+                f"**{added} new offer(s)** added to the worklist as *Pending* "
+                f"(across {scanned} companies · {dupes} duplicates skipped{extra}). "
+                f"Close this dialog to see them at the top of the table — then select and **Evaluate**."
+            )
+        _offers_df = pd.DataFrame(offers)[["company", "title", "location", "url"]]
+        st.dataframe(
+            _offers_df,
+            hide_index=True, use_container_width=True,
+            height=min(520, 38 + 35 * (len(_offers_df) + 1)),
+            column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
+        )
+    else:
+        api_count, _ = _count_portal_apis()
+        hint = (
+            "Add API-backed companies (Greenhouse / Ashby / Lever / Workday / MCF) in **Settings → Portals**."
+            if api_count == 0 else
+            "Either nothing new was posted, or the title filter excluded everything. "
+            "Try the **By title** tab with a broader keyword, or loosen `title_filter.positive`."
+        )
+        st.warning(f"0 new offers across {scanned} companies. {hint}")
+
+    errors = summary.get("errors") or []
+    if errors:
+        with st.expander(f"{len(errors)} API error(s)"):
+            for e in errors:
+                st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
+
+
+def _render_scan_offers(offers: list, scanned_label: str, dry_run: bool, dupes: int = 0):
+    """Promote offers into the tracker (unless dry run) and show the result table."""
+    if dry_run:
+        st.success(
+            f"**{len(offers)} offer(s)** found via {scanned_label}. "
+            f"_(dry run — nothing written. Uncheck dry run to add them to the tracker.)_"
+        )
+    else:
+        promo = tracker.promote_scanned_offers(offers)
+        st.cache_data.clear()
+        added = promo.get("added", 0)
+        skipped = promo.get("skipped", 0)
+        extra = f" · {skipped} already tracked" if skipped else ""
+        dup_txt = f" · {dupes} duplicates skipped" if dupes else ""
+        st.success(
+            f"**{added} new offer(s)** added to the worklist as *Pending* "
+            f"(via {scanned_label}{dup_txt}{extra}). "
+            f"Close this dialog to see them at the top of the table — then select and **Evaluate**."
+        )
+    _df = pd.DataFrame(offers)
+    cols = [c for c in ("company", "title", "location", "url") if c in _df.columns]
+    st.dataframe(
+        _df[cols], hide_index=True, use_container_width=True,
+        height=min(520, 38 + 35 * (len(_df) + 1)),
+        column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
+    )
+
+
+def _execute_websearch_scan(*, dry_run: bool, company: str | None, titles: list[str] | None):
+    """Run a WebSearch scan via `claude -p`, then promote new offers. One long
+    Claude call, so we show a spinner rather than a per-company log."""
+    if not batch.claude_cli_available():
+        st.error("`claude` CLI not found on PATH. Install Claude Code to use WebSearch scans.")
+        return
+    label = "company web search" if company else ("title web search" if titles else "web search")
+    with st.spinner("Searching the web with Claude… this can take a minute or two."):
+        summary = runner.websearch_scan(company=company, titles=titles)
+
+    if not summary.get("ok"):
+        if summary.get("hint") == "no-claude":
+            st.error("`claude` CLI not found on PATH. Install Claude Code to use WebSearch scans.")
+        else:
+            st.error("WebSearch scan failed.")
+            for e in (summary.get("errors") or []):
+                st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
+            stderr = summary.get("_raw_stderr") or ""
+            if stderr.strip():
+                st.code(stderr[-1200:], language="text")
+        return
+
+    offers = summary.get("offers") or []
+    _stamp_refresh()
+    if offers:
+        _render_scan_offers(offers, f"Claude {label}", dry_run)
+    else:
+        st.warning(
+            "0 postings found. The web search ran but returned nothing usable — "
+            "try a more specific company or title, or widen your `search_queries` in portals.yml."
+        )
+    with st.expander("Raw Claude response"):
+        st.code((summary.get("_raw_stdout") or "")[-3000:], language="text")
+
+
+@st.dialog("Scan portals", width="large")
 def scan_dialog():
     api_count, total_count = _count_portal_apis()
+    portal_names = _portal_company_names(api_only=True)
     st.markdown(
-        f'<div style="color:var(--tx3);font-size:0.85rem;margin-bottom:8px;">'
-        f'{api_count} of {total_count} tracked companies have an API endpoint. '
+        f'<div style="color:var(--tx3);font-size:0.85rem;margin-bottom:4px;">'
+        f'{api_count} of {total_count} tracked companies have a zero-token endpoint. '
         f'Last scan: <strong>{last_scan}</strong>'
         f'{f" · refreshed {last_refresh}" if last_refresh else ""}.'
         f'</div>',
         unsafe_allow_html=True,
     )
+    st.caption(
+        "New roles are added to the worklist as **Pending** — open this dialog, run a scan, "
+        "then close it to see and evaluate them in the table."
+    )
 
-    portal_names = _portal_company_names(api_only=True)
-    use_filter = st.checkbox("Restrict to one company", value=False, key="scan_use_filter")
-    company = ""
-    if use_filter and portal_names:
+    dry_run = st.toggle("Dry run (preview only — nothing written)", value=False, key="scan_dryrun")
+
+    tab_full, tab_company, tab_title, tab_web = st.tabs(
+        ["🔄 Full sweep", "🏢 By company", "🔎 By title", "🌐 Web search (Claude)"]
+    )
+
+    # 1. Full sweep — everything new since the last scan.
+    with tab_full:
+        st.markdown("**Scan every portal for roles posted since the last scan.**")
+        st.caption("Hits all API-backed companies with your configured title filter. The default sweep.")
+        if st.button("Run full sweep", type="primary", use_container_width=True, key="scan_full"):
+            _execute_scan(dry_run=dry_run, company=None, titles=None)
+
+    # 2. By company — one company, across all of its portals.
+    with tab_company:
+        st.markdown("**Scan a single company across all of its portals.**")
+        company = st.text_input(
+            "Company name", placeholder="e.g. Swiss Re", key="scan_company_text",
+            help="Matches any tracked company whose name contains this text.",
+        )
+        if portal_names:
+            with st.expander(f"{len(portal_names)} companies the scanner can reach"):
+                st.write(", ".join(portal_names))
+        if st.button("Scan company", type="primary", use_container_width=True,
+                     key="scan_company_run", disabled=not company.strip()):
+            _execute_scan(dry_run=dry_run, company=company.strip(), titles=None)
+
+    # 3. By title — find roles matching a title across all portals.
+    with tab_title:
+        st.markdown("**Find roles matching a title across all portals.**")
+        st.caption("Overrides your configured title filter with exactly these keywords.")
+        titles_raw = st.text_input(
+            "Title keyword(s)", placeholder="e.g. Chief Data Officer, Head of Risk",
+            key="scan_title_text",
+            help="Comma-separated. Matches job titles containing any of these phrases.",
+        )
+        titles = [t.strip() for t in titles_raw.split(",") if t.strip()]
+        if st.button("Scan by title", type="primary", use_container_width=True,
+                     key="scan_title_run", disabled=not titles):
+            _execute_scan(dry_run=dry_run, company=None, titles=titles)
+
+    # 4. Web search — covers WebSearch-only sources (LinkedIn, eFinancialCareers,
+    #    recruiters) the zero-token engine can't reach. Uses Claude tokens.
+    with tab_web:
+        st.markdown("**Search the open web with Claude** (LinkedIn · eFinancialCareers · recruiters).")
         st.caption(
-            f"Only the **{len(portal_names)} API-backed** companies are listed — "
-            f"WebSearch-only entries can't be scanned from here."
+            "Covers the WebSearch-only sources the engine can't reach. "
+            "⚠️ Uses Claude tokens and takes a minute or two — needs the `claude` CLI."
         )
-        company = st.selectbox(
-            "Company",
-            options=portal_names, index=0, key="scan_company_pick",
+        web_focus = st.radio(
+            "Search scope", ["Configured queries", "By company", "By title"],
+            horizontal=True, key="web_scope",
+            help="Configured queries = your portals.yml search_queries. Or focus on one company / title.",
         )
-    elif use_filter:
-        company = st.text_input("Company name", placeholder="e.g. Anthropic", key="scan_company_text")
+        web_company, web_titles = None, None
+        if web_focus == "By company":
+            web_company = st.text_input("Company name", placeholder="e.g. Munich Re",
+                                        key="web_company_text").strip() or None
+        elif web_focus == "By title":
+            _wt = st.text_input("Title keyword(s)", placeholder="e.g. Chief Data Officer, Head of AI",
+                                key="web_title_text")
+            web_titles = [t.strip() for t in _wt.split(",") if t.strip()] or None
+        if not batch.claude_cli_available():
+            st.warning("`claude` CLI not detected on PATH — install Claude Code to enable this.")
+        _web_disabled = (web_focus == "By company" and not web_company) or \
+                        (web_focus == "By title" and not web_titles)
+        if st.button("Run web search", type="primary", use_container_width=True,
+                     key="scan_web_run", disabled=_web_disabled):
+            _execute_websearch_scan(dry_run=dry_run, company=web_company, titles=web_titles)
 
-    dry_run = st.checkbox("Dry run (preview only — no files written)", value=False, key="scan_dryrun")
-
-    c1, c2 = st.columns(2)
-    if c1.button("Cancel", use_container_width=True, key="scan_cancel"):
+    if st.button("Close", use_container_width=True, key="scan_close"):
         st.session_state["show_scan_dialog"] = False
         st.rerun()
-    if c2.button("Run scan", type="primary", use_container_width=True, key="scan_run"):
-        with st.spinner("Scanning portals…"):
-            summary = runner.scan_summary(dry_run=dry_run, company=company.strip() or None)
-
-        if summary.get("ok"):
-            n_new = int(summary.get("new_offers") or 0)
-            scanned = int(summary.get("companies_scanned") or 0)
-            dupes = int(summary.get("duplicates") or 0)
-            if n_new > 0:
-                st.success(f"Found **{n_new} new offer(s)** across {scanned} companies · {dupes} duplicates skipped.")
-                with st.expander("New offers", expanded=True):
-                    offers = summary.get("offers") or []
-                    if offers:
-                        _offers_df = pd.DataFrame(offers)[["company", "title", "location", "url"]]
-                        st.dataframe(
-                            _offers_df,
-                            hide_index=True, use_container_width=True,
-                            height=min(700, 38 + 35 * (len(_offers_df) + 1)),
-                            column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
-                        )
-            else:
-                hint = (
-                    "Enable more API-backed companies in **Settings → Portals**."
-                    if api_count == 0 else
-                    "Either nothing new was posted, or the title filter excluded everything. "
-                    "Loosen `title_filter.positive` to widen the net."
-                )
-                st.warning(f"0 new offers across {scanned} companies. {hint}")
-
-            # Persist a fresh .last-refresh stamp so the freshness banner clears.
-            try:
-                marker = project_root() / LAST_REFRESH_PATH
-                marker.parent.mkdir(parents=True, exist_ok=True)
-                marker.write_text(dt.datetime.now().isoformat(), encoding="utf-8")
-            except Exception:
-                pass
-
-            errors = summary.get("errors") or []
-            if errors:
-                with st.expander(f"{len(errors)} API error(s)"):
-                    for e in errors:
-                        st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
-        else:
-            errors = summary.get("errors") or []
-            hint = summary.get("hint")
-            if hint == "no-api":
-                # Name matched but it's a WebSearch-only entry — that's expected
-                # for ~90% of portals.yml. Show as info, not error.
-                names = ", ".join(summary.get("matched_names") or [])
-                st.info(
-                    f"**{names}** has no Greenhouse / Ashby / Lever endpoint, so the zero-token "
-                    f"scanner can't reach it. Add an `api:` URL in **Settings → Portals**, or use "
-                    f"`/career-ops scan` in Claude Code to do a WebSearch-based scan."
-                )
-            elif hint == "no-match":
-                st.warning(
-                    f"No company in portals.yml matches **{summary.get('filter_company','?')}**. "
-                    f"Check the spelling — picker below shows all enabled companies."
-                )
-            else:
-                st.error("Scan failed.")
-                if errors:
-                    for e in errors:
-                        st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
-                else:
-                    stderr = summary.get("_raw_stderr") or ""
-                    if stderr.strip():
-                        st.code(stderr[-1500:], language="text")
-
-        st.cache_data.clear()
 
 
 @st.dialog("Diagnostics", width="large")
@@ -738,7 +899,7 @@ if not state_df.empty and "id" in state_df.columns:
 
 # ── Filter strip ───────────────────────────────────────────────────────
 
-f1, f2, f3, f4 = st.columns([2.2, 1.4, 1.2, 1.0])
+f1, f2, f3, f4, f5 = st.columns([1.9, 1.3, 1.3, 1.1, 1.0])
 f1.markdown("##### Worklist")
 sort_choice = f2.selectbox(
     "Sort",
@@ -746,8 +907,11 @@ sort_choice = f2.selectbox(
     label_visibility="collapsed",
     key="worklist_sort",
 )
-hide_no = f3.toggle("Hide 'No'", value=True, help="Hide rows you've marked Interest = No.")
-show_inactive = f4.toggle("Show inactive", value=False,
+fresh_only = f3.toggle("🆕 New this week", value=False,
+                       key="worklist_fresh_only",
+                       help="Show only Pending roles added in the last 7 days (fresh from a scan).")
+hide_no = f4.toggle("Hide 'No'", value=True, help="Hide rows you've marked Interest = No.")
+show_inactive = f5.toggle("Show inactive", value=False,
                           help="Include Discarded / SKIP / Rejected / expired postings.")
 
 _interest_map = interest.load_interest()
@@ -765,6 +929,10 @@ df["__interest"] = df["num"].map(_interest_map).fillna("")
 worklist = df if show_inactive else df[~df["__expired"]]
 if hide_no:
     worklist = worklist[worklist["__interest"] != "No"]
+if fresh_only:
+    _wa = dt.datetime.now() - dt.timedelta(days=7)
+    worklist = worklist[(worklist["status"] == "Pending") &
+                        (worklist["date"].notna()) & (worklist["date"] >= _wa)]
 
 # Column filters
 _status_options = ["Pending", "Watchlist", "Evaluated", "In progress", "Applied",
@@ -838,12 +1006,20 @@ else:
     worklist["__group"] = worklist["status"].map(_smart_group).fillna(3).astype(int)
     # In-progress rows should bubble to the top so progress is visible.
     worklist["__active"] = worklist["num"].isin(_inprog_ids)
+    # Fresh roles (Pending, added in the last 7 days — straight off a scan) get
+    # the very top so the user sees "what's new" the moment a scan finishes.
+    _wa_smart = dt.datetime.now() - dt.timedelta(days=7)
+    worklist["__fresh"] = (
+        (worklist["status"] == "Pending")
+        & worklist["date"].notna()
+        & (worklist["date"] >= _wa_smart)
+    )
     worklist = worklist.sort_values(
-        ["__active", "__group", "score", "__sort", "date"],
-        ascending=[False, True, False, True, False],
+        ["__active", "__fresh", "__group", "score", "__sort", "date"],
+        ascending=[False, False, True, False, True, False],
         na_position="last",
     )
-    worklist = worklist.drop(columns=["__group", "__active"])
+    worklist = worklist.drop(columns=["__group", "__active", "__fresh"])
 
 worklist = worklist.drop(columns=["__sort", "__expired"])
 

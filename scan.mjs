@@ -21,10 +21,19 @@
  * Zero Claude API tokens — pure HTTP + JSON.
  *
  * Usage:
- *   node scan.mjs                  # scan all enabled companies
- *   node scan.mjs --dry-run        # preview without writing files
- *   node scan.mjs --company Cohere # scan a single company
- *   node scan.mjs --verify         # Playwright-check each new URL; drop expired postings
+ *   node scan.mjs                       # scan all enabled companies
+ *   node scan.mjs --dry-run             # preview without writing files
+ *   node scan.mjs --company Cohere      # scan a single company across its portals
+ *   node scan.mjs --title "Head of AI"  # override the positive title filter (role scan)
+ *   node scan.mjs --json                # emit a single machine-readable JSON summary
+ *   node scan.mjs --verify              # Playwright-check each new URL; drop expired postings
+ *
+ * --title accepts a comma-separated list and may be repeated:
+ *   node scan.mjs --title "Chief Data,Head of Risk" --title "VP Analytics"
+ *
+ * In --json mode, all human-readable output is suppressed on stdout (only the
+ * JSON object is printed there); live progress still streams on stderr so a UI
+ * can show a running log while capturing the final JSON.
  */
 
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync, readdirSync } from 'fs';
@@ -118,8 +127,14 @@ function resolveProvider(entry, providers, { skipIds = [] } = {}) {
 
 // ── Title filter ────────────────────────────────────────────────────
 
-function buildTitleFilter(titleFilter) {
-  const positive = (titleFilter?.positive || []).map(k => k.toLowerCase());
+function buildTitleFilter(titleFilter, positiveOverride = null) {
+  // A non-empty positiveOverride (from `--title`) replaces the configured
+  // positive keywords entirely — this is a role-specific scan, the user wants
+  // exactly those titles. The configured negative list still applies so junk
+  // ("intern", "contract", etc.) stays filtered.
+  const positive = (positiveOverride && positiveOverride.length
+    ? positiveOverride
+    : (titleFilter?.positive || [])).map(k => k.toLowerCase());
   const negative = (titleFilter?.negative || []).map(k => k.toLowerCase());
 
   return (title) => {
@@ -378,43 +393,78 @@ async function main() {
   const args = process.argv.slice(2);
   const dryRun = args.includes('--dry-run');
   const verify = args.includes('--verify');
+  const jsonOut = args.includes('--json');
   const companyFlag = args.indexOf('--company');
   const filterCompany = companyFlag !== -1 ? args[companyFlag + 1]?.toLowerCase() : null;
+  const filterCompanyRaw = companyFlag !== -1 ? args[companyFlag + 1] : null;
+
+  // Collect every `--title` value (repeatable + comma-separated). These override
+  // the positive title filter for a role-specific scan. Track value indices so
+  // they aren't mistaken for unknown flags below.
+  const titleOverride = [];
+  const flagValueIdx = new Set();
+  if (companyFlag !== -1) flagValueIdx.add(companyFlag + 1);
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === '--title' && i + 1 < args.length) {
+      flagValueIdx.add(i + 1);
+      for (const t of String(args[i + 1]).split(',')) {
+        const k = t.trim();
+        if (k) titleOverride.push(k);
+      }
+    }
+  }
+
+  // log()  → human-readable summary on stdout, suppressed in --json mode.
+  // progress() → live status on stderr, always on (UI streams it as a log).
+  const log = jsonOut ? () => {} : (...a) => console.log(...a);
+  const progress = (...a) => console.error(...a);
 
   // Warn on unknown flags instead of silently ignoring them — a typo like
   // `--min-score` would otherwise run a full (wrong) scan with no signal.
-  // The value after --company is not a flag, so it is never flagged here.
-  const KNOWN_FLAGS = new Set(['--dry-run', '--verify', '--company']);
-  const companyValueIdx = companyFlag !== -1 ? companyFlag + 1 : -1;
+  const KNOWN_FLAGS = new Set(['--dry-run', '--verify', '--company', '--title', '--json']);
   const unknownFlags = args.filter((a, i) =>
-    a.startsWith('--') && !KNOWN_FLAGS.has(a) && i !== companyValueIdx);
+    a.startsWith('--') && !KNOWN_FLAGS.has(a) && !flagValueIdx.has(i));
   if (unknownFlags.length > 0) {
     console.error(`⚠️  Unknown flag(s): ${unknownFlags.join(', ')}`);
-    console.error('   Valid flags: --dry-run, --company <name>, --verify');
+    console.error('   Valid flags: --dry-run, --company <name>, --title <kw>, --json, --verify');
+  }
+
+  // emitFatal — in --json mode, print a structured failure object on stdout so
+  // the UI gets a parseable result instead of falling back to "0 offers".
+  function emitFatal(message, extra = {}) {
+    if (jsonOut) {
+      console.log(JSON.stringify({
+        ok: false, new_offers: 0, companies_scanned: 0, total_found: 0,
+        filtered: 0, filtered_title: 0, filtered_location: 0, duplicates: 0,
+        offers: [], errors: [{ company: 'scan', error: message }], ...extra,
+      }));
+    } else {
+      console.error(`Error: ${message}`);
+    }
+    process.exit(1);
   }
 
   // 1. Load providers
   const providers = await loadProviders(PROVIDERS_DIR);
   if (providers.size === 0) {
-    console.error('Error: no providers loaded from providers/');
-    process.exit(1);
+    emitFatal('no providers loaded from providers/');
   }
 
   // 2. Read portals.yml
   if (!existsSync(PORTALS_PATH)) {
-    console.error('Error: portals.yml not found. Run onboarding first.');
-    process.exit(1);
+    emitFatal('portals.yml not found. Run onboarding first.');
   }
 
   const config = parseYaml(readFileSync(PORTALS_PATH, 'utf-8'));
   const companies = config.tracked_companies || [];
-  const titleFilter = buildTitleFilter(config.title_filter);
+  const titleFilter = buildTitleFilter(config.title_filter, titleOverride);
   const locationFilter = buildLocationFilter(config.location_filter);
 
   // 3. Resolve a provider for each enabled company
   const targets = [];
   let skippedCount = 0;
   const resolveErrors = [];
+  const nameMatched = [];      // enabled companies whose name matched --company
   for (const company of companies) {
     if (!company || typeof company !== 'object') continue;
     if (company.enabled === false) continue;
@@ -423,15 +473,30 @@ async function main() {
       continue;
     }
     if (filterCompany && !company.name.toLowerCase().includes(filterCompany)) continue;
+    if (filterCompany) nameMatched.push(company.name);
     const resolved = resolveProvider(company, providers);
     if (!resolved) { skippedCount++; continue; }
     if (resolved.error) { resolveErrors.push({ company: company.name, error: resolved.error }); continue; }
     targets.push({ ...company, _provider: resolved.provider });
   }
 
+  // Company-scan with no usable target: distinguish "name not found" from
+  // "found but no zero-token endpoint" so the UI can show the right hint.
+  if (filterCompany && targets.length === 0) {
+    if (nameMatched.length === 0) {
+      emitFatal(`no company in portals.yml matches "${filterCompanyRaw}"`,
+        { hint: 'no-match', filter_company: filterCompanyRaw });
+    } else {
+      emitFatal(`"${nameMatched.join(', ')}" has no Greenhouse/Ashby/Lever/Workday/MCF endpoint`,
+        { hint: 'no-api', matched_names: nameMatched, filter_company: filterCompanyRaw });
+    }
+  }
+
   const localParserCount = targets.filter(t => t._provider.id === 'local-parser').length;
-  console.log(`Scanning ${targets.length} companies via providers (${localParserCount} local parser; ${skippedCount} skipped — no provider matched)`);
-  if (dryRun) console.log('(dry run — no files will be written)\n');
+  log(`Scanning ${targets.length} companies via providers (${localParserCount} local parser; ${skippedCount} skipped — no provider matched)`);
+  progress(`Scanning ${targets.length} compan${targets.length === 1 ? 'y' : 'ies'}…`
+    + (titleOverride.length ? ` (titles: ${titleOverride.join(', ')})` : ''));
+  if (dryRun) log('(dry run — no files will be written)\n');
 
   // 4. Load dedup sets
   const seenUrls = loadSeenUrls();
@@ -446,10 +511,13 @@ async function main() {
   const newOffers = [];
   const errors = [...resolveErrors];
 
+  let completedTasks = 0;
   const tasks = targets.map(company => async () => {
     let provider = company._provider;
     const ctx = makeHttpCtx();
     let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
+    let matchedHere = 0;
+    let foundHere = 0;
     try {
       let jobs;
       try {
@@ -470,6 +538,7 @@ async function main() {
         throw new Error(`${provider.id}: fetch() did not return an array`);
       }
       totalFound += jobs.length;
+      foundHere = jobs.length;
 
       for (const job of jobs) {
         if (!titleFilter(job.title)) {
@@ -492,8 +561,11 @@ async function main() {
         // Mark as seen to avoid intra-scan dupes
         seenUrls.add(job.url);
         seenCompanyRoles.add(key);
+        matchedHere++;
         newOffers.push({ ...job, source: sourceName });
       }
+      completedTasks++;
+      progress(`[${completedTasks}/${targets.length}] ✓ ${company.name} — ${matchedHere} new (${foundHere} found)`);
     } catch (err) {
       // Surface the underlying cause. Node's `fetch` reports a bare
       // "fetch failed" and stashes the real reason (ENOTFOUND, ETIMEDOUT,
@@ -504,6 +576,8 @@ async function main() {
         company: company.name,
         error: cause ? `${err.message} (${cause})` : err.message,
       });
+      completedTasks++;
+      progress(`[${completedTasks}/${targets.length}] ✗ ${company.name} — ${cause || err.message}`);
     }
   });
 
@@ -552,46 +626,74 @@ async function main() {
     }
   }
 
-  // 7. Print summary
-  console.log(`\n${'━'.repeat(45)}`);
-  console.log(`Portal Scan — ${date}`);
-  console.log(`${'━'.repeat(45)}`);
-  console.log(`Companies scanned:     ${targets.length}`);
-  console.log(`Total jobs found:      ${totalFound}`);
-  console.log(`Filtered by title:     ${totalFilteredTitle} removed`);
-  console.log(`Filtered by location:  ${totalFilteredLocation} removed`);
-  console.log(`Duplicates:            ${totalDupes} skipped`);
+  // 7. Print summary (human-readable — suppressed in --json mode)
+  log(`\n${'━'.repeat(45)}`);
+  log(`Portal Scan — ${date}`);
+  log(`${'━'.repeat(45)}`);
+  log(`Companies scanned:     ${targets.length}`);
+  log(`Total jobs found:      ${totalFound}`);
+  log(`Filtered by title:     ${totalFilteredTitle} removed`);
+  log(`Filtered by location:  ${totalFilteredLocation} removed`);
+  log(`Duplicates:            ${totalDupes} skipped`);
   if (verify) {
-    console.log(`Expired (verified):    ${expiredOffers.length} dropped`);
-    console.log(`No apply control:      ${droppedOffers.length} dropped`);
-    console.log(`Invalid (guarded):     ${invalidOffers.length} dropped`);
+    log(`Expired (verified):    ${expiredOffers.length} dropped`);
+    log(`No apply control:      ${droppedOffers.length} dropped`);
+    log(`Invalid (guarded):     ${invalidOffers.length} dropped`);
   }
-  console.log(`New offers added:      ${verifiedOffers.length}`);
+  log(`New offers added:      ${verifiedOffers.length}`);
 
   if (errors.length > 0) {
-    console.log(`\nErrors (${errors.length}):`);
+    log(`\nErrors (${errors.length}):`);
     for (const e of errors) {
-      console.log(`  ✗ ${e.company}: ${e.error}`);
+      log(`  ✗ ${e.company}: ${e.error}`);
     }
-    console.log('  → Usually transient (network/DNS/timeout) — re-run to retry.');
-    console.log('    If it persists, the careers URL or provider may have changed:');
-    console.log('    check that company\'s entry in portals.yml (careers_url / provider / slug).');
+    log('  → Usually transient (network/DNS/timeout) — re-run to retry.');
+    log('    If it persists, the careers URL or provider may have changed:');
+    log('    check that company\'s entry in portals.yml (careers_url / provider / slug).');
   }
 
   if (verifiedOffers.length > 0) {
-    console.log('\nNew offers:');
+    log('\nNew offers:');
     for (const o of verifiedOffers) {
-      console.log(`  + ${o.company} | ${o.title} | ${o.location || 'N/A'}`);
+      log(`  + ${o.company} | ${o.title} | ${o.location || 'N/A'}`);
     }
     if (dryRun) {
-      console.log('\n(dry run — run without --dry-run to save results)');
+      log('\n(dry run — run without --dry-run to save results)');
     } else {
-      console.log(`\nResults saved to ${PIPELINE_PATH} and ${SCAN_HISTORY_PATH}`);
+      log(`\nResults saved to ${PIPELINE_PATH} and ${SCAN_HISTORY_PATH}`);
     }
   }
 
-  console.log(`\n→ Run /career-ops pipeline to evaluate new offers.`);
-  console.log('→ Share results and get help: https://discord.gg/8pRpHETxa4');
+  log(`\n→ Run /career-ops pipeline to evaluate new offers.`);
+  log('→ Share results and get help: https://discord.gg/8pRpHETxa4');
+
+  // 8. Machine-readable summary on stdout for the dashboard. Keys mirror the
+  // contract the Streamlit `runner.scan_summary` consumer expects. `filtered`
+  // is the combined title+location count; the split is exposed too.
+  if (jsonOut) {
+    progress(`Done — ${verifiedOffers.length} new offer${verifiedOffers.length === 1 ? '' : 's'} added.`);
+    console.log(JSON.stringify({
+      ok: true,
+      dry_run: dryRun,
+      companies_scanned: targets.length,
+      total_found: totalFound,
+      filtered: totalFilteredTitle + totalFilteredLocation,
+      filtered_title: totalFilteredTitle,
+      filtered_location: totalFilteredLocation,
+      duplicates: totalDupes,
+      new_offers: verifiedOffers.length,
+      title_override: titleOverride,
+      filter_company: filterCompanyRaw || null,
+      offers: verifiedOffers.map(o => ({
+        company: o.company,
+        title: o.title,
+        location: o.location || '',
+        url: o.url,
+        source: o.source || '',
+      })),
+      errors,
+    }));
+  }
 }
 
 // Only run main() when invoked directly (`node scan.mjs`), not when imported by tests.
