@@ -127,34 +127,14 @@ with st.sidebar:
 
     st.divider()
 
-    # ── Command palette — one click per /career-ops command ──────────
-    st.markdown('<div class="section-label" style="margin-top:4px;">Commands</div>',
-                unsafe_allow_html=True)
-
-    def _go_desk(state_key: str | None = None):
-        if state_key:
-            st.session_state[state_key] = True
-        # Always route through Desk because that's where every dialog lives.
-        try:
-            st.switch_page("pages/desk.py")
-        except Exception:
-            pass
-
-    cmd_buttons = [
-        ("📥  Paste JD URL",       "show_paste_dialog",  "Drop a JD URL into the inbox."),
-        ("🛰️  Scan portals",        "show_scan_dialog",   "Greenhouse / Ashby / Lever sweep."),
-        ("📨  Inbox",               "show_inbox_dialog",  "Process pending URLs in pipeline.md."),
-        ("⚡  Evaluate pending",    "show_eval_dialog",   "Run batch evaluation."),
-        ("🧰  Diagnostics",         "show_diag_dialog",   "Liveness · dedup · update check."),
-    ]
-    for label, key, tip in cmd_buttons:
-        if st.button(label, use_container_width=True, key=f"cmd_{key}", help=tip):
-            _go_desk(key)
-
+    # The sidebar used to repeat the five command buttons that already live
+    # on Desk → Quick actions. That meant two surfaces for the same five
+    # dialogs, so we drop it. A short caption points the user at the cards.
     st.markdown(
-        '<div style="margin-top:8px;color:var(--tx3);font-size:0.75rem;">'
+        '<div style="color:var(--tx3);font-size:0.78rem;line-height:1.55;">'
+        'Actions live on <strong>Desk → Quick actions</strong>.<br>'
         'Per-role commands (PDF · Apply · Contacto · Deep · Interview-prep · LaTeX) '
-        'live on the <strong>Role</strong> page.<br>'
+        'are on the <strong>Role</strong> page.<br>'
         'Training / Project evaluations are on <strong>Signals → Lab</strong>.'
         '</div>',
         unsafe_allow_html=True,
