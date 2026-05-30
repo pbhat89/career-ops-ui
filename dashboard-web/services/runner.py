@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 from . import project_root
 
@@ -96,33 +97,133 @@ def run_script(script: str, *args: str, timeout: int = 300) -> RunResult:
 
 # ── High-level wrappers used by pages ──────────────────────────────────
 
-def scan(dry_run: bool = False, company: Optional[str] = None, json_out: bool = False) -> RunResult:
+def _scan_args(dry_run: bool, company: Optional[str], titles: Optional[Sequence[str]],
+               json_out: bool) -> list[str]:
     args: list[str] = []
     if dry_run:
         args.append("--dry-run")
     if company:
         args.extend(["--company", company.strip()])
+    for t in (titles or []):
+        t = (t or "").strip()
+        if t:
+            args.extend(["--title", t])
     if json_out:
         args.append("--json")
-    return run_script("scan.mjs", *args, timeout=600)
+    return args
 
 
-def scan_summary(dry_run: bool = False, company: Optional[str] = None) -> dict:
+def scan(dry_run: bool = False, company: Optional[str] = None,
+         titles: Optional[Sequence[str]] = None, json_out: bool = False) -> RunResult:
+    return run_script("scan.mjs", *_scan_args(dry_run, company, titles, json_out), timeout=600)
+
+
+def _fallback_summary(result: RunResult) -> dict:
+    return {
+        "ok": result.ok,
+        "errors": [{"company": "scan", "error": result.stderr.strip() or "no JSON returned"}],
+        "new_offers": 0,
+        "companies_scanned": 0,
+        "total_found": 0,
+        "filtered": 0,
+        "duplicates": 0,
+        "offers": [],
+    }
+
+
+def scan_summary(dry_run: bool = False, company: Optional[str] = None,
+                 titles: Optional[Sequence[str]] = None) -> dict:
     """Run scan.mjs --json and return its parsed summary. Always returns a dict
     so callers don't have to defensively check None — `ok` is False on failure."""
-    result = scan(dry_run=dry_run, company=company, json_out=True)
+    result = scan(dry_run=dry_run, company=company, titles=titles, json_out=True)
     payload = result.json()
     if not isinstance(payload, dict):
-        payload = {
-            "ok": result.ok,
-            "errors": [{"company": "scan", "error": result.stderr.strip() or "no JSON returned"}],
-            "new_offers": 0,
-            "companies_scanned": 0,
-            "total_found": 0,
-            "filtered": 0,
-            "duplicates": 0,
-            "offers": [],
-        }
+        payload = _fallback_summary(result)
+    payload["_raw_stdout"] = (result.stdout or "")[-4000:]
+    payload["_raw_stderr"] = (result.stderr or "")[-4000:]
+    payload["_returncode"] = result.returncode
+    return payload
+
+
+def scan_stream(
+    on_line: Callable[[str], None],
+    dry_run: bool = False,
+    company: Optional[str] = None,
+    titles: Optional[Sequence[str]] = None,
+    timeout: int = 600,
+) -> dict:
+    """Run `scan.mjs --json`, streaming live progress lines (stderr) to `on_line`
+    as they arrive, while capturing the JSON summary (stdout) in full.
+
+    Returns the same dict shape as `scan_summary`. This powers the live
+    TQDM-style log in the scan dialog: each company emits a `[k/N] ✓ …` line
+    on stderr the moment it completes; the single JSON object lands on stdout
+    at the end.
+    """
+    root = project_root()
+    script_path = root / "scan.mjs"
+    if not script_path.exists():
+        return _fallback_summary(RunResult(False, "", "scan.mjs not found", 127))
+    try:
+        node_path = _node()
+    except RuntimeError as exc:
+        return _fallback_summary(RunResult(False, "", str(exc), 127))
+
+    args = [node_path, str(script_path), *_scan_args(dry_run, company, titles, json_out=True)]
+    try:
+        proc = subprocess.Popen(
+            args,
+            cwd=str(root),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+        )
+    except (OSError, FileNotFoundError) as exc:
+        return _fallback_summary(RunResult(False, "", f"Failed to launch scan: {exc}", 1))
+
+    # Drain stdout in a thread so a full pipe buffer can never deadlock the
+    # stderr reader (the JSON blob is small, but be safe).
+    stdout_chunks: list[str] = []
+
+    def _drain_stdout() -> None:
+        assert proc.stdout is not None
+        for chunk in proc.stdout:
+            stdout_chunks.append(chunk)
+
+    t = threading.Thread(target=_drain_stdout, daemon=True)
+    t.start()
+
+    stderr_lines: list[str] = []
+    try:
+        assert proc.stderr is not None
+        for raw in proc.stderr:
+            line = raw.rstrip("\n")
+            if not line:
+                continue
+            stderr_lines.append(line)
+            try:
+                on_line(line)
+            except Exception:
+                pass
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        return _fallback_summary(RunResult(False, "", f"Scan timed out after {timeout}s", 124))
+    finally:
+        t.join(timeout=5)
+
+    result = RunResult(
+        ok=proc.returncode == 0,
+        stdout="".join(stdout_chunks),
+        stderr="\n".join(stderr_lines),
+        returncode=proc.returncode or 0,
+    )
+    payload = result.json()
+    if not isinstance(payload, dict):
+        payload = _fallback_summary(result)
     payload["_raw_stdout"] = (result.stdout or "")[-4000:]
     payload["_raw_stderr"] = (result.stderr or "")[-4000:]
     payload["_returncode"] = result.returncode

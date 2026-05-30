@@ -7,6 +7,7 @@ through the TSV → merge-tracker.mjs path (per CLAUDE.md), never direct.
 
 from __future__ import annotations
 
+import datetime as dt
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -243,6 +244,103 @@ def update_status(num: int, new_status: str, note_append: str = "") -> None:
         raise KeyError(f"No tracker row with num={num}")
 
     paths.apps_file.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+
+
+def _norm_url(u: str) -> str:
+    return str(u or "").strip().rstrip("/").lower()
+
+
+def _norm_text(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(s or "").lower())
+
+
+def _cell(s: str) -> str:
+    """Sanitize a value for a markdown table cell: no pipes, no newlines."""
+    return str(s or "").replace("|", "/").replace("\n", " ").replace("\r", " ").strip()
+
+
+def promote_scanned_offers(offers: list[dict]) -> dict:
+    """Append freshly-scanned offers to applications.md as `Pending` rows so
+    they appear in the main worklist and can be evaluated from the UI.
+
+    Each offer is a dict with keys company / title / location / url / source
+    (the shape `scan.mjs --json` emits). The JD URL is stored in the Notes
+    column as `URL: <url>` — that's where `load_applications()` resolves
+    `job_url`, which is what makes the row evaluable.
+
+    Idempotent: skips any offer whose URL already exists in the tracker, and
+    any whose company+role already has a row. Returns
+    {added, skipped, nums: [...]}.
+    """
+    result = {"added": 0, "skipped": 0, "nums": []}
+    if not offers:
+        return result
+
+    paths = TrackerPaths.discover()
+    if not paths.apps_file.exists():
+        return result
+
+    df = load_applications()
+    seen_urls = set()
+    seen_company_role = set()
+    max_num = 0
+    if not df.empty:
+        for _, r in df.iterrows():
+            if r.get("job_url"):
+                seen_urls.add(_norm_url(r["job_url"]))
+            seen_company_role.add((_norm_text(r.get("company")), _norm_text(r.get("role"))))
+            try:
+                max_num = max(max_num, int(r["num"]))
+            except (TypeError, ValueError):
+                pass
+
+    today = dt.date.today().isoformat()
+    new_rows: list[str] = []
+    for o in offers:
+        url = str(o.get("url") or "").strip()
+        company = _cell(o.get("company"))
+        role = _cell(o.get("title"))
+        if not url or not company or not role:
+            result["skipped"] += 1
+            continue
+        nurl = _norm_url(url)
+        cr = (_norm_text(company), _norm_text(role))
+        if nurl in seen_urls or cr in seen_company_role:
+            result["skipped"] += 1
+            continue
+        seen_urls.add(nurl)
+        seen_company_role.add(cr)
+        max_num += 1
+        note_bits = [f"URL: {url}"]
+        loc = _cell(o.get("location"))
+        if loc:
+            note_bits.append(f"({loc})")
+        note = " ".join(note_bits)
+        new_rows.append(
+            f"| {max_num} | {today} | {company} | {role} | -/5 | Pending | ❌ | - | {note} |"
+        )
+        result["added"] += 1
+        result["nums"].append(max_num)
+
+    if not new_rows:
+        return result
+
+    # Insert directly after the header separator row (|---|...), so the freshly
+    # scanned jobs surface at the TOP of the tracker — newest first.
+    lines = paths.apps_file.read_text(encoding="utf-8").splitlines()
+    insert_idx = None
+    for i, ln in enumerate(lines):
+        s = ln.strip()
+        if s.startswith("|") and set(s) <= set("|-: "):
+            insert_idx = i + 1
+            break
+    if insert_idx is None:
+        # No separator found — append at end of file.
+        lines.extend(new_rows)
+    else:
+        lines[insert_idx:insert_idx] = new_rows
+    paths.apps_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return result
 
 
 def status_counts(df: pd.DataFrame) -> dict[str, int]:

@@ -135,3 +135,61 @@ def test_mark_pipeline_processed_moves_row(temp_root):
 
 def test_mark_pipeline_processed_returns_false_for_unknown(temp_root):
     assert tracker.mark_pipeline_processed("https://never-added.example.com") is False
+
+
+# ── promote_scanned_offers (scan → worklist) ──────────────────────────
+
+def test_promote_adds_pending_rows_with_resolvable_url(temp_root):
+    offers = [
+        {"company": "Acme", "title": "Head of AI", "location": "Singapore",
+         "url": "https://x.example.com/job1", "source": "workday-api"},
+    ]
+    res = tracker.promote_scanned_offers(offers)
+    assert res["added"] == 1
+    df = tracker.load_applications()
+    row = df[df["company"] == "Acme"].iloc[0]
+    assert row["status"] == "Pending"
+    # URL stored in notes must resolve to job_url → makes the row evaluable.
+    assert row["job_url"] == "https://x.example.com/job1"
+
+
+def test_promote_dedupes_by_url_and_company_role(temp_root):
+    offers = [
+        {"company": "Acme", "title": "Head of AI", "url": "https://x.example.com/dup"},
+        {"company": "Acme", "title": "Head of AI", "url": "https://x.example.com/dup"},   # dup URL
+        # dup company+role vs fixture row 1 (HSBC / Head of DAO Singapore)
+        {"company": "HSBC", "title": "Head of DAO Singapore", "url": "https://x.example.com/hsbc"},
+        {"company": "Beta", "title": "Chief Data Officer", "url": "https://x.example.com/beta"},
+    ]
+    res = tracker.promote_scanned_offers(offers)
+    assert res["added"] == 2          # Acme + Beta
+    assert res["skipped"] == 2        # dup URL + dup company/role
+
+
+def test_promote_skips_offers_missing_fields(temp_root):
+    offers = [
+        {"company": "", "title": "Head of AI", "url": "https://x.example.com/a"},
+        {"company": "Acme", "title": "", "url": "https://x.example.com/b"},
+        {"company": "Acme", "title": "Lead DS", "url": ""},
+    ]
+    res = tracker.promote_scanned_offers(offers)
+    assert res["added"] == 0
+    assert res["skipped"] == 3
+
+
+def test_promote_sanitizes_pipe_in_company_role(temp_root):
+    offers = [{"company": "A|B Corp", "title": "Head | of AI",
+               "url": "https://x.example.com/pipe"}]
+    res = tracker.promote_scanned_offers(offers)
+    assert res["added"] == 1
+    # Table must still parse — the row count grows by exactly one.
+    df = tracker.load_applications()
+    assert len(df) == 6
+    assert df[df["job_url"] == "https://x.example.com/pipe"].iloc[0]["status"] == "Pending"
+
+
+def test_promote_empty_is_noop(temp_root):
+    before = len(tracker.load_applications())
+    res = tracker.promote_scanned_offers([])
+    assert res == {"added": 0, "skipped": 0, "nums": []}
+    assert len(tracker.load_applications()) == before

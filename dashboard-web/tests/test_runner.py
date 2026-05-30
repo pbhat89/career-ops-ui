@@ -87,3 +87,39 @@ def test_scan_summary_parses_real_json(temp_root, monkeypatch):
     assert payload["companies_scanned"] == 5
     assert len(payload["offers"]) == 1
     assert payload["offers"][0]["company"] == "Foo"
+
+
+def test_scan_args_builds_title_and_company_flags():
+    args = runner._scan_args(dry_run=True, company="Swiss Re",
+                             titles=["Chief Data", "Head of Risk"], json_out=True)
+    assert "--dry-run" in args
+    assert args[args.index("--company") + 1] == "Swiss Re"
+    # Each title becomes its own --title <value> pair.
+    title_idxs = [i for i, a in enumerate(args) if a == "--title"]
+    assert len(title_idxs) == 2
+    assert args[title_idxs[0] + 1] == "Chief Data"
+    assert args[title_idxs[1] + 1] == "Head of Risk"
+    assert "--json" in args
+
+
+def test_scan_args_drops_blank_titles():
+    args = runner._scan_args(dry_run=False, company=None,
+                             titles=["", "  ", "VP Analytics"], json_out=False)
+    assert args.count("--title") == 1
+    assert args[args.index("--title") + 1] == "VP Analytics"
+    assert "--json" not in args
+    assert "--company" not in args
+
+
+def test_scan_summary_passes_titles_through(temp_root, monkeypatch):
+    captured = {}
+
+    def fake_run(script, *args, **kwargs):
+        captured["args"] = args
+        return runner.RunResult(ok=True, stdout='{"ok": true, "new_offers": 0, "offers": []}',
+                                stderr="", returncode=0)
+
+    monkeypatch.setattr(runner, "run_script", fake_run)
+    runner.scan_summary(dry_run=False, company=None, titles=["Head of AI"])
+    assert "--title" in captured["args"]
+    assert "Head of AI" in captured["args"]
