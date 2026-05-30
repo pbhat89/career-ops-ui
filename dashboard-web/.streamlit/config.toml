@@ -18,7 +18,7 @@ showSidebarNavigation = true
 # reach. Keeping them in sync prevents a second accent colour leaking through.
 [theme]
 base = "dark"
-primaryColor = "#44D49A"
+primaryColor = "#2DAF7E"
 backgroundColor = "#12161B"
 secondaryBackgroundColor = "#1A1F26"
 textColor = "#ECEEF1"

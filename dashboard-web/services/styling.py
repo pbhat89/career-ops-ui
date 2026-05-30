@@ -1,11 +1,11 @@
-"""Global CSS — shadcn-inspired charcoal + green dark theme (v2).
+"""Global CSS — shadcn-inspired charcoal + teal dark theme (v2).
 
 Palette:
   --bg-page  #12161B   secondary surface
   --bg-card  #1A1F26   primary card / panel  (raised 1 stop)
   --bg-elev  #232A33   raised element / hover
   --bg-deep  #0B0E12   sidebar — darker than main
-  --accent   #44D49A   primary green
+  --accent   #2DAF7E   primary teal
 
 Typography:
   Inter (UI) + JetBrains Mono (code), Material Symbols Rounded preserved.
@@ -40,12 +40,12 @@ _CSS = """
     --tx3:            #858A91;
     --tx4:            #5F6469;
 
-    /* Accent green — brighter so primary buttons pop */
-    --accent:         #44D49A;
-    --accent-h:       #5BE1AC;
-    --accent-d:       #34B27F;
-    --accent-tint:    rgba(68,212,154,0.18);
-    --accent-soft:    rgba(68,212,154,0.08);
+    /* Accent — deeper teal; readable with dark button labels, less neon glare */
+    --accent:         #2DAF7E;
+    --accent-h:       #3FC58F;
+    --accent-d:       #1E8F66;
+    --accent-tint:    rgba(45,175,126,0.18);
+    --accent-soft:    rgba(45,175,126,0.08);
 
     --info:           #5B8FE6;
     --warn:           #FBBF24;
@@ -55,11 +55,11 @@ _CSS = """
 
     --status-pending:    #858A91;
     --status-watch:      #C4B5FD;
-    --status-eval:       #44D49A;
+    --status-eval:       #2DAF7E;
     --status-applied:    #5B8FE6;
     --status-responded:  #FBBF24;
     --status-interview:  #6EE7B7;
-    --status-offer:      #44D49A;
+    --status-offer:      #2DAF7E;
     --status-rejected:   #F87171;
     --status-discarded:  #5F6469;
     --status-inprog:     #FBBF24;
@@ -72,7 +72,7 @@ _CSS = """
     --shadow-sm:      0 1px 2px rgba(0,0,0,0.30);
     --shadow:         0 4px 12px rgba(0,0,0,0.30), 0 1px 0 rgba(255,255,255,0.04) inset;
     --shadow-lg:      0 12px 32px rgba(0,0,0,0.36), 0 1px 0 rgba(255,255,255,0.05) inset;
-    --shadow-glow:    0 0 0 1px rgba(68,212,154,0.18), 0 6px 24px rgba(68,212,154,0.12);
+    --shadow-glow:    0 0 0 1px rgba(45,175,126,0.18), 0 6px 24px rgba(45,175,126,0.12);
 }
 
 /* Scoped font — body only */
@@ -112,7 +112,7 @@ i.material-icons {
 
 .stApp {
     background:
-        radial-gradient(900px 500px at 12% -10%, rgba(68,212,154,0.06), transparent 60%),
+        radial-gradient(900px 500px at 12% -10%, rgba(45,175,126,0.06), transparent 60%),
         radial-gradient(700px 400px at 88% 8%, rgba(91,143,230,0.04), transparent 60%),
         var(--bg-page);
 }
@@ -353,8 +353,8 @@ code, pre, [data-testid="stCodeBlock"] {
     transform: none !important;
 }
 [data-testid="stSidebar"] .stButton > button:hover {
-    background: rgba(68,212,154,0.08) !important;
-    border-color: rgba(68,212,154,0.22) !important;
+    background: rgba(45,175,126,0.08) !important;
+    border-color: rgba(45,175,126,0.22) !important;
     color: var(--accent-h) !important;
     transform: translateX(2px);
 }
@@ -457,9 +457,9 @@ hr { border-color: var(--bd-sub) !important; margin: 1.4rem 0 !important; }
 /* Hero card — refined gradient + glow */
 .hero-card {
     background:
-        linear-gradient(135deg, rgba(68,212,154,0.16) 0%, rgba(68,212,154,0.03) 45%, rgba(26,31,38,0.0) 100%),
+        linear-gradient(135deg, rgba(45,175,126,0.16) 0%, rgba(45,175,126,0.03) 45%, rgba(26,31,38,0.0) 100%),
         var(--bg-card);
-    border: 1px solid rgba(68,212,154,0.28);
+    border: 1px solid rgba(45,175,126,0.28);
     border-radius: var(--radius-xl);
     padding: 1.5rem 1.8rem;
     margin-bottom: 1.3rem;
@@ -473,14 +473,14 @@ hr { border-color: var(--bd-sub) !important; margin: 1.4rem 0 !important; }
     top: 0; left: 0; bottom: 0;
     width: 3px;
     background: linear-gradient(180deg, var(--accent), var(--accent-d));
-    box-shadow: 0 0 16px rgba(68,212,154,0.32);
+    box-shadow: 0 0 16px rgba(45,175,126,0.32);
 }
 .hero-card::after {
     content: "";
     position: absolute;
     top: -50%; right: -10%;
     width: 280px; height: 280px;
-    background: radial-gradient(circle, rgba(68,212,154,0.10) 0%, transparent 60%);
+    background: radial-gradient(circle, rgba(45,175,126,0.10) 0%, transparent 60%);
     pointer-events: none;
 }
 .hero-card h1 {
@@ -530,7 +530,7 @@ hr { border-color: var(--bd-sub) !important; margin: 1.4rem 0 !important; }
 .section-header .sh-badge {
     background: var(--accent-soft);
     color: var(--accent);
-    border: 1px solid rgba(68,212,154,0.30);
+    border: 1px solid rgba(45,175,126,0.30);
     padding: 2px 8px;
     border-radius: 999px;
     font-size: 0.7rem;
@@ -559,7 +559,7 @@ hr { border-color: var(--bd-sub) !important; margin: 1.4rem 0 !important; }
     position: absolute;
     top: 0; right: 0;
     width: 90px; height: 90px;
-    background: radial-gradient(circle at 100% 0%, rgba(68,212,154,0.10), transparent 70%);
+    background: radial-gradient(circle at 100% 0%, rgba(45,175,126,0.10), transparent 70%);
     pointer-events: none;
     opacity: 0;
     transition: opacity 200ms ease-out;
@@ -610,7 +610,7 @@ hr { border-color: var(--bd-sub) !important; margin: 1.4rem 0 !important; }
     white-space: nowrap;
 }
 .pill-default  { background: rgba(255,255,255,0.04); color: var(--tx2); border-color: var(--bd-str); }
-.pill-accent   { background: var(--accent-soft); color: var(--accent); border-color: rgba(68,212,154,0.30); }
+.pill-accent   { background: var(--accent-soft); color: var(--accent); border-color: rgba(45,175,126,0.30); }
 .pill-info     { background: rgba(91,143,230,0.10); color: #8FB4DF; border-color: rgba(91,143,230,0.28); }
 .pill-warn     { background: rgba(251,191,36,0.10); color: var(--warn); border-color: rgba(251,191,36,0.30); }
 .pill-danger   { background: rgba(248,113,113,0.10); color: var(--danger); border-color: rgba(248,113,113,0.30); }
@@ -651,7 +651,7 @@ hr { border-color: var(--bd-sub) !important; margin: 1.4rem 0 !important; }
     backdrop-filter: blur(4px);
 }
 .banner-info    { background: rgba(91,143,230,0.10); border-color: rgba(91,143,230,0.28); color: #8FB4DF; }
-.banner-success { background: rgba(68,212,154,0.10); border-color: rgba(68,212,154,0.30); color: var(--success); }
+.banner-success { background: rgba(45,175,126,0.10); border-color: rgba(45,175,126,0.30); color: var(--success); }
 .banner-warn    { background: rgba(251,191,36,0.10); border-color: rgba(251,191,36,0.30); color: var(--warn); }
 .banner-danger  { background: rgba(248,113,113,0.10); border-color: rgba(248,113,113,0.30); color: var(--danger); }
 
@@ -756,7 +756,7 @@ hr { border-color: var(--bd-sub) !important; margin: 1.4rem 0 !important; }
     background: linear-gradient(90deg, var(--accent), var(--accent-h));
     border-radius: 2px;
     transition: width 400ms ease-out;
-    box-shadow: 0 0 8px rgba(68,212,154,0.40);
+    box-shadow: 0 0 8px rgba(45,175,126,0.40);
 }
 
 /* Scrollbar */

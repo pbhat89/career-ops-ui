@@ -47,7 +47,7 @@ def test_styling_injects_without_error(monkeypatch):
     assert captured.get("unsafe") is True
     # Inter is the UI font in the shadcn-style revamp (was Outfit pre-v2)
     assert "Inter" in captured["html"]
-    assert "#44D49A" in captured["html"]     # brighter accent green (post-revamp)
+    assert "#2DAF7E" in captured["html"]     # deeper teal accent (post-revamp)
     assert "row-progress" in captured["html"]  # per-row progress class
     assert "action-card" in captured["html"]   # the card grid CSS
     # Tiles and pills introduced in the shadcn-style revamp
