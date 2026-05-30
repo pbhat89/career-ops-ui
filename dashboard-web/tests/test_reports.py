@@ -81,6 +81,27 @@ def test_extract_global_score(temp_root):
     assert "APPLY HIGH" in gs
 
 
+def test_strip_block_heading_removes_english_heading(temp_root):
+    block_e = reports.extract_block("reports/001-hsbc-2026-05-02.md", "E")
+    stripped = reports.strip_block_heading(block_e)
+    assert not stripped.startswith("## E)")
+    assert "CV updates" in stripped
+
+
+def test_strip_block_heading_removes_legacy_spanish_heading():
+    # Older batch reports carried Spanish block titles; the UI must render
+    # them under its own English label, so the leading heading is dropped.
+    md = "## E) Plan de Personalización\n\nTop 5 CV changes\n"
+    stripped = reports.strip_block_heading(md)
+    assert "Plan de Personalización" not in stripped
+    assert stripped.startswith("Top 5 CV changes")
+
+
+def test_strip_block_heading_noop_without_heading():
+    assert reports.strip_block_heading("just body text") == "just body text"
+    assert reports.strip_block_heading("") == ""
+
+
 def test_extract_block_invalid_letter_returns_empty(temp_root):
     assert reports.extract_block("reports/001-hsbc-2026-05-02.md", "Z") == ""
 
