@@ -199,6 +199,69 @@ def test_websearch_scan_parses_offers(temp_root, monkeypatch):
     assert res["offers"][0]["source"] == "websearch"
 
 
+# ── WebSearch result filtering (aggregate junk + company constraint) ──
+
+def test_prompt_company_forbids_other_employers_and_aggregates():
+    p = runner.build_websearch_prompt([], company="Chubb")
+    assert 'role AT "Chubb"' in p
+    # The anti-junk rules must be present so Claude doesn't return roll-ups.
+    assert "NEVER 'Various'" in p
+    assert "(multiple)" in p and "(index)" in p
+    # Focused cap, not a firehose.
+    assert str(runner.WEBSEARCH_DEFAULT_MAX_RESULTS) in p
+
+
+def test_is_aggregate_offer_flags_various_and_index_rows():
+    assert runner._is_aggregate_offer({"company": "Various", "title": "Head of AI"})
+    assert runner._is_aggregate_offer({"company": "Multiple", "title": "CDO"})
+    assert runner._is_aggregate_offer({"company": "Acme", "title": "Chief Data Officer (multiple)"})
+    assert runner._is_aggregate_offer({"company": "Acme", "title": "Head of AI (listings index)"})
+    # A real single posting is NOT aggregate…
+    assert not runner._is_aggregate_offer({"company": "Chubb", "title": "Head of Data Science"})
+    # …and "Index" inside a real title (no parenthetical roundup) survives.
+    assert not runner._is_aggregate_offer({"company": "MSCI", "title": "Head of Index Products"})
+
+
+def test_filter_websearch_offers_company_mode_drops_other_employers():
+    offers = [
+        {"company": "Chubb", "title": "Head of Data Science", "url": "https://c/1"},
+        {"company": "GXS Bank", "title": "Head, Data Solutions & AI", "url": "https://g/2"},
+        {"company": "Various", "title": "CDO (multiple)", "url": "https://x/3"},
+        {"company": "Chubb Insurance", "title": "Head of Analytics", "url": "https://c/4"},
+    ]
+    out = runner._filter_websearch_offers(offers, company="Chubb")
+    names = [o["company"] for o in out]
+    assert names == ["Chubb", "Chubb Insurance"]  # fuzzy match keeps both; junk + GXS dropped
+
+
+def test_filter_websearch_offers_caps_results():
+    offers = [{"company": "Foo", "title": f"Role {i}", "url": f"https://f/{i}"} for i in range(40)]
+    out = runner._filter_websearch_offers(offers, company=None, max_results=15)
+    assert len(out) == 15
+
+
+def test_websearch_scan_company_mode_filters_other_companies(temp_root, monkeypatch):
+    import json as _json
+    import services.batch as _batch
+    monkeypatch.setattr(_batch, "find_claude", lambda: "claude")
+
+    payload = _json.dumps([
+        {"company": "Chubb", "title": "Head of Data Science", "url": "https://c/1", "location": "SG"},
+        {"company": "GXS Bank", "title": "Head, Data & AI", "url": "https://g/2", "location": "SG"},
+        {"company": "Various", "title": "CDO (index)", "url": "https://x/3", "location": "SG"},
+    ])
+
+    class _Proc:
+        returncode = 0
+        stdout = _json.dumps({"result": payload, "is_error": False})
+        stderr = ""
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: _Proc())
+    res = runner.websearch_scan(company="Chubb")
+    assert res["ok"] is True
+    assert [o["company"] for o in res["offers"]] == ["Chubb"]
+
+
 # ── Profile-derived default search queries ────────────────────────────
 
 def _write_profile(temp_root, body: str):

@@ -560,14 +560,15 @@ def _render_scan_picker():
     st.divider()
     dup_txt = f" · {dupes} duplicates already skipped" if dupes else ""
     st.markdown(f"###### Add to worklist — {len(offers)} found via {label}{dup_txt}")
-    st.caption("Untick anything you don't want. Selected roles are added as **Pending**, ready to evaluate.")
+    st.caption("Tick the roles you want, then click **Add selected**. They land in the worklist as **Pending**, ready to evaluate. Nothing is added until you tick it.")
 
     picker_df = pd.DataFrame(offers)
     for col in ("company", "title", "location", "url"):
         if col not in picker_df.columns:
             picker_df[col] = ""
     picker_df = picker_df[["company", "title", "location", "url"]].copy()
-    picker_df.insert(0, "Add", True)
+    # Start UNCHECKED — the user opts each role in, rather than opting junk out.
+    picker_df.insert(0, "Add", False)
 
     edited = st.data_editor(
         picker_df,
@@ -576,7 +577,7 @@ def _render_scan_picker():
         height=min(520, 38 + 35 * (len(picker_df) + 1)),
         key="scan_picker_editor",
         column_config={
-            "Add": st.column_config.CheckboxColumn("Add", default=True, width="small"),
+            "Add": st.column_config.CheckboxColumn("Add", default=False, width="small"),
             "company": st.column_config.TextColumn("Company", disabled=True),
             "title": st.column_config.TextColumn("Title", disabled=True),
             "location": st.column_config.TextColumn("Location", disabled=True, width="small"),
@@ -587,27 +588,35 @@ def _render_scan_picker():
     pc1, pc2 = st.columns([2, 1])
     if pc1.button("➕ Add selected to worklist", type="primary", use_container_width=True,
                   key="scan_picker_add"):
-        # Map edited rows back to the original offer dicts by position.
+        # Map edited rows back to the original offer dicts by position. Default to
+        # NOTHING selected if the mask can't be read — never add silently.
         try:
             mask = list(edited["Add"])
         except Exception:
-            mask = [True] * len(offers)
+            mask = [False] * len(offers)
         selected = [offers[i] for i, keep in enumerate(mask) if keep and i < len(offers)]
         if not selected:
-            st.warning("Nothing selected — tick at least one row.")
+            st.warning("Nothing selected — tick the **Add** box on at least one row first.")
             return
         promo = tracker.promote_scanned_offers(selected)
         added = promo.get("added", 0)
         skipped = promo.get("skipped", 0)
         st.session_state.pop("scan_results", None)
         st.cache_data.clear()
-        extra = f" ({skipped} already tracked)" if skipped else ""
-        st.success(
-            f"Added {added} to the worklist as Pending — close this dialog to evaluate them.{extra}"
-        )
+        if added:
+            extra = f" ({skipped} already in your tracker)" if skipped else ""
+            # Toast survives the rerun; rerun so the worklist behind the dialog
+            # immediately reflects the new Pending rows.
+            st.toast(f"Added {added} role(s) to the worklist as Pending.{extra}", icon="✅")
+            st.rerun()
+        else:
+            st.info(
+                f"Nothing added — all {skipped} selected role(s) are already in your tracker."
+                if skipped else "Nothing added."
+            )
     if pc2.button("Discard results", use_container_width=True, key="scan_picker_discard"):
         st.session_state.pop("scan_results", None)
-        st.caption("Results discarded. Run another scan above when ready.")
+        st.rerun()
 
 
 @st.dialog("Scan portals", width="large")

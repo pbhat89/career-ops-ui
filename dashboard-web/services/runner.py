@@ -243,6 +243,9 @@ def scan_stream(
 # tokens, so the UI gates it behind an explicit opt-in.
 
 WEBSEARCH_DEFAULT_MAX_QUERIES = 8
+# A focused list beats a firehose: cap results so the picker stays scannable
+# (the user wants the ~top 10-15 nearest title matches, not hundreds).
+WEBSEARCH_DEFAULT_MAX_RESULTS = 15
 
 # Hard override so the headless run can't get hijacked by the repo's career-ops
 # skill (which otherwise asks a clarifying AskUserQuestion and returns nothing).
@@ -347,22 +350,27 @@ def _load_search_queries() -> list[str]:
 
 def build_websearch_prompt(queries: Sequence[str], company: Optional[str] = None,
                            titles: Optional[Sequence[str]] = None,
-                           max_queries: int = WEBSEARCH_DEFAULT_MAX_QUERIES) -> str:
+                           max_queries: int = WEBSEARCH_DEFAULT_MAX_QUERIES,
+                           max_results: int = WEBSEARCH_DEFAULT_MAX_RESULTS) -> str:
     """Construct the `claude -p` prompt for a WebSearch scan. Pure function so
     it's unit-testable without invoking Claude."""
     titles = [t.strip() for t in (titles or []) if t and str(t).strip()]
     if company:
         body = (
-            f'Find CURRENT, live job postings at the company "{company}" for senior '
-            f"AI / Data / Analytics / Decision-Science leadership roles. Search the company's "
-            f"careers site, LinkedIn, eFinancialCareers, and the open web. Prefer Singapore / APAC."
+            f'Find CURRENT, live, individual job postings at the employer "{company}" ITSELF — '
+            f"for senior AI / Data / Analytics / Decision-Science leadership roles. "
+            f"Search that company's own careers site / ATS, plus its postings on LinkedIn and "
+            f"eFinancialCareers. Prefer Singapore / APAC.\n"
+            f'EVERY result MUST be a role AT "{company}". Do NOT include roles at any other '
+            f"employer, and do NOT invent a roll-up. Rank results so the title that most closely "
+            f"matches that AI/Data/Analytics leadership focus comes first."
         )
     elif titles:
         joined = ", ".join(f'"{t}"' for t in titles)
         body = (
             f"Find CURRENT, live job postings whose title matches any of: {joined}. "
             f"Search LinkedIn, eFinancialCareers, MyCareersFuture, and company career sites. "
-            f"Prefer Singapore / APAC."
+            f"Prefer Singapore / APAC. Rank the nearest title matches first."
         )
     else:
         qs = list(queries)[:max_queries]
@@ -377,11 +385,15 @@ def build_websearch_prompt(queries: Sequence[str], company: Optional[str] = None
         f"{body}\n\n"
         "Return ONLY a JSON array (no prose, no markdown code fences) of objects with EXACTLY "
         "these keys: company, title, url, location. Rules for every object:\n"
-        "- company and title MUST be non-empty (the exact employer and exact job title).\n"
+        "- company MUST be the ONE real hiring employer — NEVER 'Various', 'Multiple', "
+        "'Several', a recruiter, or a job-board aggregator.\n"
+        "- title MUST be ONE concrete, specific job title — NEVER a roundup or index such as "
+        "'... (multiple)', '... (index)', or '... (listings index)'.\n"
         "- url MUST be a direct link to ONE specific job posting — reject search-result pages, "
         "news articles, press releases, and careers homepages.\n"
-        "- Skip any result where you cannot determine a concrete job title.\n"
-        "Cap at 25 results. If you find nothing usable, return []. Do NOT write or modify any files."
+        "- Skip any result where you cannot determine a concrete job title and a single employer.\n"
+        f"Return at most {max_results} results, nearest title match first. "
+        "If you find nothing usable, return []. Do NOT write or modify any files."
     )
 
 
@@ -425,6 +437,54 @@ def _parse_offers_from_text(text: str) -> list[dict]:
                     })
             return out
     return []
+
+
+# Company labels that mark an aggregate / index row rather than one real employer.
+_AGGREGATE_COMPANIES = {
+    "various", "multiple", "several", "n/a", "na", "none", "unknown", "tbd", "",
+}
+# A parenthetical roundup marker, e.g. "Chief Data Officer (multiple)" or
+# "Head of AI (listings index)". Anchored to parentheses so real titles that
+# merely contain a word like "Index" (e.g. "Head of Index Products") survive.
+_AGGREGATE_TITLE_RE = re.compile(
+    r"\([^)]*\b(?:multiple|listings?|index|round[\s-]?up|various|several|aggregat\w*)\b[^)]*\)",
+    re.IGNORECASE,
+)
+
+
+def _norm_company(s: Optional[str]) -> str:
+    """Lowercase, strip everything but alphanumerics — for fuzzy company match."""
+    return re.sub(r"[^a-z0-9]+", "", str(s or "").lower())
+
+
+def _is_aggregate_offer(o: dict) -> bool:
+    """True for junk roll-up rows (company 'Various', title '… (multiple)', …)
+    that aren't a single concrete posting and shouldn't reach the picker."""
+    if str(o.get("company") or "").strip().lower() in _AGGREGATE_COMPANIES:
+        return True
+    return bool(_AGGREGATE_TITLE_RE.search(str(o.get("title") or "")))
+
+
+def _filter_websearch_offers(offers: list[dict], company: Optional[str] = None,
+                             max_results: int = WEBSEARCH_DEFAULT_MAX_RESULTS) -> list[dict]:
+    """Drop aggregate/index junk and — in company mode — anything not actually
+    at the requested employer, then cap the list. Order is preserved (Claude is
+    asked to return nearest title match first)."""
+    want = _norm_company(company) if company else ""
+    out: list[dict] = []
+    for o in offers:
+        if _is_aggregate_offer(o):
+            continue
+        if want:
+            got = _norm_company(o.get("company"))
+            # Keep only same-employer rows (fuzzy: either name contains the other,
+            # so "Chubb" matches "Chubb Insurance" but not "GXS Bank").
+            if not got or (want not in got and got not in want):
+                continue
+        out.append(o)
+        if len(out) >= max_results:
+            break
+    return out
 
 
 def websearch_scan(company: Optional[str] = None, titles: Optional[Sequence[str]] = None,
@@ -477,6 +537,9 @@ def websearch_scan(company: Optional[str] = None, titles: Optional[Sequence[str]
         pass
 
     offers = _parse_offers_from_text(result_text)
+    # Drop roll-up/index rows and, in company mode, anything not at that employer;
+    # cap to a focused shortlist so the picker stays scannable.
+    offers = _filter_websearch_offers(offers, company=company)
     ok = proc.returncode == 0
     return {
         "ok": ok,
