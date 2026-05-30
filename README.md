@@ -147,16 +147,17 @@ portals.yml ── tracked_companies ──► scan.mjs (engine, zero-token) ─
             └─ search_queries ───────► /career-ops scan (WebSearch + LLM) ──► Claude Code only
 ```
 
-The dashboard scanner has three modes (all engine-only):
+The dashboard scanner has four modes:
 
-- **🔄 Full sweep** — every API-backed company, your title filter; new roles since last scan
-- **🏢 By company** — one company across all its portals
-- **🔎 By title** — find roles matching a title you type (overrides the title filter)
+- **🔄 Full sweep** — every API-backed company, your title filter; new roles since last scan *(zero-token engine)*
+- **🏢 By company** — one company across all its portals *(zero-token engine)*
+- **🔎 By title** — find roles matching a title you type, overrides the title filter *(zero-token engine)*
+- **🌐 Web search (Claude)** — runs your `search_queries` (LinkedIn, eFinancialCareers, recruiters) through `claude -p` + WebSearch. Best-effort and **uses Claude tokens** — opt-in, gated behind a warning.
 
-New roles land in the worklist as **Pending** with their JD URL, so you can select and **Evaluate** them straight from the table. Reachable engine sources today: **MyCareersFuture** (broad SG coverage) + **Workday** (Prudential, UOB, Swiss Re) + **Greenhouse** (Trust Bank).
+New roles land in the worklist as **Pending** with their JD URL, so you can select and **Evaluate** them straight from the table. Reachable engine sources today: **MyCareersFuture** (broad SG coverage) + **Workday** (Prudential, UOB, Swiss Re) + **Greenhouse** (Trust Bank). The Web-search mode reaches everything else, at the cost of tokens.
 
 <a id="why-the-scan-button-is-api-only"></a>
-**Why the scan button is API-only:** `scan.mjs` is a pure HTTP/JSON process with **no LLM** — that's what makes it free and instant. WebSearch needs an agent to form queries, read snippets, judge relevance, and extract `{title, company, url}` — work only Claude can do. So WebSearch sources (LinkedIn, eFinancialCareers, …) live in `/career-ops scan`, not the button.
+**Why the three engine modes are API-only:** `scan.mjs` is a pure HTTP/JSON process with **no LLM** — that's what makes it free and instant. WebSearch needs an agent to form queries, read snippets, judge relevance, and extract `{title, company, url}` — work only Claude can do. That's why WebSearch lives in its own **4th mode** (which shells out to `claude -p` and costs tokens) and in `/career-ops scan`, kept separate from the zero-token engine.
 
 ---
 

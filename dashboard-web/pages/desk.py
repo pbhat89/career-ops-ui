@@ -500,6 +500,69 @@ def _execute_scan(*, dry_run: bool, company: str | None, titles: list[str] | Non
                 st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
 
 
+def _render_scan_offers(offers: list, scanned_label: str, dry_run: bool, dupes: int = 0):
+    """Promote offers into the tracker (unless dry run) and show the result table."""
+    if dry_run:
+        st.success(
+            f"**{len(offers)} offer(s)** found via {scanned_label}. "
+            f"_(dry run — nothing written. Uncheck dry run to add them to the tracker.)_"
+        )
+    else:
+        promo = tracker.promote_scanned_offers(offers)
+        st.cache_data.clear()
+        added = promo.get("added", 0)
+        skipped = promo.get("skipped", 0)
+        extra = f" · {skipped} already tracked" if skipped else ""
+        dup_txt = f" · {dupes} duplicates skipped" if dupes else ""
+        st.success(
+            f"**{added} new offer(s)** added to the worklist as *Pending* "
+            f"(via {scanned_label}{dup_txt}{extra}). "
+            f"Close this dialog to see them at the top of the table — then select and **Evaluate**."
+        )
+    _df = pd.DataFrame(offers)
+    cols = [c for c in ("company", "title", "location", "url") if c in _df.columns]
+    st.dataframe(
+        _df[cols], hide_index=True, use_container_width=True,
+        height=min(520, 38 + 35 * (len(_df) + 1)),
+        column_config={"url": st.column_config.LinkColumn("url", display_text="open")},
+    )
+
+
+def _execute_websearch_scan(*, dry_run: bool, company: str | None, titles: list[str] | None):
+    """Run a WebSearch scan via `claude -p`, then promote new offers. One long
+    Claude call, so we show a spinner rather than a per-company log."""
+    if not batch.claude_cli_available():
+        st.error("`claude` CLI not found on PATH. Install Claude Code to use WebSearch scans.")
+        return
+    label = "company web search" if company else ("title web search" if titles else "web search")
+    with st.spinner("Searching the web with Claude… this can take a minute or two."):
+        summary = runner.websearch_scan(company=company, titles=titles)
+
+    if not summary.get("ok"):
+        if summary.get("hint") == "no-claude":
+            st.error("`claude` CLI not found on PATH. Install Claude Code to use WebSearch scans.")
+        else:
+            st.error("WebSearch scan failed.")
+            for e in (summary.get("errors") or []):
+                st.text(f"✗ {e.get('company','?')}: {e.get('error','?')}")
+            stderr = summary.get("_raw_stderr") or ""
+            if stderr.strip():
+                st.code(stderr[-1200:], language="text")
+        return
+
+    offers = summary.get("offers") or []
+    _stamp_refresh()
+    if offers:
+        _render_scan_offers(offers, f"Claude {label}", dry_run)
+    else:
+        st.warning(
+            "0 postings found. The web search ran but returned nothing usable — "
+            "try a more specific company or title, or widen your `search_queries` in portals.yml."
+        )
+    with st.expander("Raw Claude response"):
+        st.code((summary.get("_raw_stdout") or "")[-3000:], language="text")
+
+
 @st.dialog("Scan portals", width="large")
 def scan_dialog():
     api_count, total_count = _count_portal_apis()
@@ -519,8 +582,8 @@ def scan_dialog():
 
     dry_run = st.toggle("Dry run (preview only — nothing written)", value=False, key="scan_dryrun")
 
-    tab_full, tab_company, tab_title = st.tabs(
-        ["🔄 Full sweep", "🏢 By company", "🔎 By title"]
+    tab_full, tab_company, tab_title, tab_web = st.tabs(
+        ["🔄 Full sweep", "🏢 By company", "🔎 By title", "🌐 Web search (Claude)"]
     )
 
     # 1. Full sweep — everything new since the last scan.
@@ -557,6 +620,35 @@ def scan_dialog():
         if st.button("Scan by title", type="primary", use_container_width=True,
                      key="scan_title_run", disabled=not titles):
             _execute_scan(dry_run=dry_run, company=None, titles=titles)
+
+    # 4. Web search — covers WebSearch-only sources (LinkedIn, eFinancialCareers,
+    #    recruiters) the zero-token engine can't reach. Uses Claude tokens.
+    with tab_web:
+        st.markdown("**Search the open web with Claude** (LinkedIn · eFinancialCareers · recruiters).")
+        st.caption(
+            "Covers the WebSearch-only sources the engine can't reach. "
+            "⚠️ Uses Claude tokens and takes a minute or two — needs the `claude` CLI."
+        )
+        web_focus = st.radio(
+            "Search scope", ["Configured queries", "By company", "By title"],
+            horizontal=True, key="web_scope",
+            help="Configured queries = your portals.yml search_queries. Or focus on one company / title.",
+        )
+        web_company, web_titles = None, None
+        if web_focus == "By company":
+            web_company = st.text_input("Company name", placeholder="e.g. Munich Re",
+                                        key="web_company_text").strip() or None
+        elif web_focus == "By title":
+            _wt = st.text_input("Title keyword(s)", placeholder="e.g. Chief Data Officer, Head of AI",
+                                key="web_title_text")
+            web_titles = [t.strip() for t in _wt.split(",") if t.strip()] or None
+        if not batch.claude_cli_available():
+            st.warning("`claude` CLI not detected on PATH — install Claude Code to enable this.")
+        _web_disabled = (web_focus == "By company" and not web_company) or \
+                        (web_focus == "By title" and not web_titles)
+        if st.button("Run web search", type="primary", use_container_width=True,
+                     key="scan_web_run", disabled=_web_disabled):
+            _execute_websearch_scan(dry_run=dry_run, company=web_company, titles=web_titles)
 
     if st.button("Close", use_container_width=True, key="scan_close"):
         st.session_state["show_scan_dialog"] = False

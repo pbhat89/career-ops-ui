@@ -123,3 +123,92 @@ def test_scan_summary_passes_titles_through(temp_root, monkeypatch):
     runner.scan_summary(dry_run=False, company=None, titles=["Head of AI"])
     assert "--title" in captured["args"]
     assert "Head of AI" in captured["args"]
+
+
+# ── WebSearch scan (claude -p path) ───────────────────────────────────
+
+def test_build_websearch_prompt_company():
+    p = runner.build_websearch_prompt([], company="Munich Re", titles=None)
+    assert "Munich Re" in p
+    assert "JSON array" in p
+    assert "company, title, url, location" in p
+
+
+def test_build_websearch_prompt_titles():
+    p = runner.build_websearch_prompt([], company=None, titles=["Chief Data Officer", "Head of AI"])
+    assert '"Chief Data Officer"' in p and '"Head of AI"' in p
+
+
+def test_build_websearch_prompt_queries_caps_at_max():
+    qs = [f"query-{i}" for i in range(20)]
+    p = runner.build_websearch_prompt(qs, max_queries=3)
+    assert "query-0" in p and "query-2" in p
+    assert "query-3" not in p
+
+
+def test_parse_offers_plain_array():
+    txt = '[{"company":"Foo","title":"Head of AI","url":"https://x","location":"SG"}]'
+    offers = runner._parse_offers_from_text(txt)
+    assert len(offers) == 1
+    assert offers[0]["source"] == "websearch"
+    assert offers[0]["company"] == "Foo"
+
+
+def test_parse_offers_fenced_and_prose():
+    txt = 'Here are the jobs I found:\n```json\n[{"company":"Bar","title":"CDO","url":"https://y","location":""}]\n```\nDone.'
+    offers = runner._parse_offers_from_text(txt)
+    assert len(offers) == 1 and offers[0]["company"] == "Bar"
+
+
+def test_parse_offers_requires_company_title_url():
+    assert runner._parse_offers_from_text("no json here") == []
+    txt = (
+        '[{"company":"NoUrl","title":"X"},'          # missing url -> drop
+        '{"title":"Y","url":"https://z"},'           # missing company -> drop
+        '{"company":"Real","url":"https://w"},'      # missing title -> drop
+        '{"company":"Good","title":"Head of AI","url":"https://ok","location":"SG"}]'
+    )
+    offers = runner._parse_offers_from_text(txt)
+    assert len(offers) == 1
+    assert offers[0]["company"] == "Good" and offers[0]["url"] == "https://ok"
+
+
+def test_websearch_scan_no_claude(temp_root, monkeypatch):
+    import services.batch as _batch
+    monkeypatch.setattr(_batch, "find_claude", lambda: None)
+    res = runner.websearch_scan(company="Munich Re")
+    assert res["ok"] is False
+    assert res["hint"] == "no-claude"
+    assert res["new_offers"] == 0
+
+
+def test_websearch_scan_parses_offers(temp_root, monkeypatch):
+    import services.batch as _batch
+    monkeypatch.setattr(_batch, "find_claude", lambda: "claude")
+
+    class _Proc:
+        returncode = 0
+        stdout = '{"result": "[{\\"company\\":\\"Foo\\",\\"title\\":\\"Head of AI\\",\\"url\\":\\"https://x\\",\\"location\\":\\"SG\\"}]", "is_error": false}'
+        stderr = ""
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: _Proc())
+    res = runner.websearch_scan(company="Foo")
+    assert res["ok"] is True
+    assert res["new_offers"] == 1
+    assert res["offers"][0]["company"] == "Foo"
+    assert res["offers"][0]["source"] == "websearch"
+
+
+def test_websearch_scan_handles_claude_failure(temp_root, monkeypatch):
+    import services.batch as _batch
+    monkeypatch.setattr(_batch, "find_claude", lambda: "claude")
+
+    class _Proc:
+        returncode = 1
+        stdout = ""
+        stderr = "boom"
+
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **k: _Proc())
+    res = runner.websearch_scan(titles=["CDO"])
+    assert res["ok"] is False
+    assert "boom" in res["errors"][0]["error"]
