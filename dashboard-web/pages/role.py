@@ -428,13 +428,17 @@ with main:
         "Interview", "Legitimacy", "Raw report",
     ])
 
-    block_a = reports.extract_block(report_path, "A") or ""
-    block_b = reports.extract_block(report_path, "B") or ""
-    block_c = reports.extract_block(report_path, "C") or ""
-    block_d = reports.extract_block(report_path, "D") or ""
-    block_e = reports.extract_block(report_path, "E") or ""
-    block_f = reports.extract_block(report_path, "F") or ""
-    block_g = reports.extract_block(report_path, "G") or ""
+    # Strip each block's own `## X) Title` heading: the tabs below supply their
+    # own English label, and dropping the heading also removes the legacy
+    # Spanish titles ("## E) Plan de Personalización") that older batch reports
+    # carry — so every tab renders in English under one clean heading.
+    block_a = reports.strip_block_heading(reports.extract_block(report_path, "A") or "")
+    block_b = reports.strip_block_heading(reports.extract_block(report_path, "B") or "")
+    block_c = reports.strip_block_heading(reports.extract_block(report_path, "C") or "")
+    block_d = reports.strip_block_heading(reports.extract_block(report_path, "D") or "")
+    block_e = reports.strip_block_heading(reports.extract_block(report_path, "E") or "")
+    block_f = reports.strip_block_heading(reports.extract_block(report_path, "F") or "")
+    block_g = reports.strip_block_heading(reports.extract_block(report_path, "G") or "")
     global_score = reports.extract_global_score(report_path)
     raw_body = reports.report_body(report_path)
 
@@ -458,6 +462,7 @@ with main:
 
     with tab_jd:
         st.caption("How your CV matches each line of the JD.")
+        st.markdown("##### B · CV match")
         _render(block_b, "Block B (CV Match) not found in this report.")
 
     with tab_comp:
@@ -475,6 +480,7 @@ with main:
 
     with tab_tailor:
         st.caption("Specific CV and LinkedIn changes to make before applying.")
+        st.markdown("##### E · Tailoring plan")
         _render(block_e, "Block E (Tailoring Plan) not found.")
 
     with tab_interview:
@@ -497,6 +503,7 @@ with main:
 
     with tab_legit:
         st.caption("Is the posting real / live? Recruiter, freshness, salary disclosure, etc.")
+        st.markdown("##### G · Posting legitimacy")
         _render(block_g, "Block G (Legitimacy) not found.")
 
     with tab_raw:

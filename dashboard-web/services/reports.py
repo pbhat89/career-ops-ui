@@ -95,6 +95,22 @@ def extract_block(report_path: str | Path, letter: str) -> str:
     return m.group(1).rstrip() if m else ""
 
 
+# A block extracted by extract_block() starts with its own `## X) Title`
+# heading. The Role page already prints an English section label above each
+# tab's content, so that heading is a duplicate — and on older batch reports
+# it is in Spanish ("## E) Plan de Personalización"), which is the only place
+# the legacy Spanish leaks into the UI. Strip it so every tab reads in English
+# under a single clean heading, regardless of the report's language.
+_LEADING_BLOCK_HEADING = re.compile(r"^\s*##\s+[A-G]\)[^\n]*\n+", re.IGNORECASE)
+
+
+def strip_block_heading(md: str) -> str:
+    """Drop a block's leading `## X) ...` heading line for in-tab rendering."""
+    if not md:
+        return md
+    return _LEADING_BLOCK_HEADING.sub("", md, count=1).lstrip("\n")
+
+
 def extract_global_score(report_path: str | Path) -> str:
     """Extract the `## Global Score` / `## Score` trailer of a report."""
     body = report_body(report_path)
