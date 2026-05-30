@@ -193,3 +193,17 @@ def test_promote_empty_is_noop(temp_root):
     res = tracker.promote_scanned_offers([])
     assert res == {"added": 0, "skipped": 0, "nums": []}
     assert len(tracker.load_applications()) == before
+
+
+def test_promote_sanitizes_pipe_in_url_keeps_table_valid(temp_root):
+    # LLM (WebSearch) could return a URL with a pipe; it must not corrupt the row.
+    offers = [{"company": "PipeCo", "title": "Head of AI",
+               "url": "https://x.example.com/job?a=1|b=2"}]
+    res = tracker.promote_scanned_offers(offers)
+    assert res["added"] == 1
+    df = tracker.load_applications()
+    # Table still parses to exactly one new row, and the row is the PipeCo Pending.
+    assert len(df) == 6
+    row = df[df["company"] == "PipeCo"].iloc[0]
+    assert row["status"] == "Pending"
+    assert "|" not in row["notes"]

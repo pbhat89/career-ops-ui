@@ -315,7 +315,9 @@ def promote_scanned_offers(offers: list[dict]) -> dict:
         loc = _cell(o.get("location"))
         if loc:
             note_bits.append(f"({loc})")
-        note = " ".join(note_bits)
+        # Sanitize the whole note — the URL can be LLM output (WebSearch mode);
+        # a stray pipe/newline would otherwise corrupt the markdown table row.
+        note = _cell(" ".join(note_bits))
         new_rows.append(
             f"| {max_num} | {today} | {company} | {role} | -/5 | Pending | ❌ | - | {note} |"
         )

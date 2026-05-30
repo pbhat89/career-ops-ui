@@ -376,9 +376,12 @@ def websearch_scan(company: Optional[str] = None, titles: Optional[Sequence[str]
                 "errors": [{"company": "scan", "error": "no search_queries configured in portals.yml"}]}
 
     prompt = build_websearch_prompt(queries, company=company, titles=titles)
+    # Block the model from asking questions (would hang headless) and from
+    # mutating the repo — it only needs WebSearch/WebFetch. skip-permissions
+    # keeps those two from prompting; disallowed-tools is the safety net.
     args = [
         claude, "-p", "--dangerously-skip-permissions",
-        "--disallowed-tools", "AskUserQuestion",
+        "--disallowed-tools", "AskUserQuestion,Write,Edit,NotebookEdit",
         "--append-system-prompt", WEBSEARCH_SYSTEM,
         "--output-format", "json", prompt,
     ]
